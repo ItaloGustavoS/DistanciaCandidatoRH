@@ -1,3 +1,4 @@
+import streamlit as st
 import requests
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
@@ -7,10 +8,13 @@ import time
 # API pública do OSRM (lembre-se dos limites de uso!)
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1/driving/"
 # User-Agent para o Nominatim (importante para identificação)
-NOMINATIM_USER_AGENT = "minha-aplicacao-lojas"
+NOMINATIM_USER_AGENT = (
+    "minha-aplicacao-lojas-streamlit"  # Altere para um nome único para sua aplicação
+)
 
 # --- Seus 7 endereços de lojas ---
 # Dica: Use o formato mais completo possível para melhor precisão na geocodificação
+# Exemplo: "Rua dos Tamoios, 300, Centro, Belo Horizonte, MG, Brasil"
 enderecos_lojas = {
     "Loja Centro": "Rua dos Tamoios, 300, Centro, Belo Horizonte, MG, Brasil",
     "Loja Savassi": "Rua Pernambuco, 1000, Savassi, Belo Horizonte, MG, Brasil",
@@ -21,29 +25,31 @@ enderecos_lojas = {
     "Loja Nova Lima": "Alameda Oscar Niemeyer, 500, Vale do Sereno, Nova Lima, MG, Brasil",
 }
 
-# --- Endereço do candidato ---
-endereco_candidato = "Rua Gonçalves Dias, 1200, Lourdes, Belo Horizonte, MG, Brasil"  # Exemplo, você vai inserir este na aplicação
+# --- Funções Auxiliares (com cache para Streamlit) ---
 
 
-# --- Funções Auxiliares ---
+@st.cache_data(
+    ttl=3600
+)  # Cacheia o resultado por 1 hora para evitar chamadas repetidas
 def geocodificar_endereco(endereco):
     """Converte um endereço textual em coordenadas de latitude e longitude."""
-    geolocator = Nominatim(user_agent=NOMINATIN_USER_AGENT)
+    geolocator = Nominatim(user_agent=NOMINATIM_USER_AGENT)
     try:
-        location = geolocator.geocode(
-            endereco, timeout=10
-        )  # Aumentar timeout pode ajudar
+        location = geolocator.geocode(endereco, timeout=10)
         if location:
             return location.latitude, location.longitude
-        print(f"ATENÇÃO: Não foi possível geocodificar: {endereco}")
+        st.warning(
+            f"Não foi possível geocodificar o endereço: '{endereco}'. Verifique a digitação."
+        )
         return None
     except (GeocoderTimedOut, GeocoderServiceError) as e:
-        print(f"ERRO de geocodificação para '{endereco}': {e}")
-        print("Aguardando 1 segundo antes de tentar novamente...")
-        time.sleep(1)  # Aguarda para evitar bloqueio por muitas requisições
-        return None  # Retorna None e a função principal irá tratar
+        st.error(
+            f"Erro de geocodificação para '{endereco}': {e}. Tente novamente mais tarde."
+        )
+        return None
 
 
+@st.cache_data(ttl=3600)  # Cacheia o resultado por 1 hora
 def obter_distancia_osrm(coord_origem, coord_destino):
     """Obtém a distância real da rota (em km) e o tempo (em segundos) via OSRM."""
     if not coord_origem or not coord_destino:
@@ -52,87 +58,101 @@ def obter_distancia_osrm(coord_origem, coord_destino):
     url = f"{OSRM_BASE_URL}{coord_origem[1]},{coord_origem[0]};{coord_destino[1]},{coord_destino[0]}?overview=false"
     try:
         response = requests.get(url)
-        response.raise_for_status()  # Levanta um erro para status HTTP ruins (4xx ou 5xx)
+        response.raise_for_status()
         data = response.json()
 
         if data and "routes" in data and len(data["routes"]) > 0:
             distance_meters = data["routes"][0]["distance"]
             duration_seconds = data["routes"][0]["duration"]
-            return distance_meters / 1000, duration_seconds  # Retorna em KM e segundos
+            return distance_meters / 1000, duration_seconds
         else:
-            print(
-                f"AVISO OSRM: Nenhuma rota encontrada entre {coord_origem} e {coord_destino}."
+            st.warning(
+                f"Nenhuma rota encontrada via OSRM entre os pontos. Verifique as coordenadas."
             )
             return None, None
     except requests.exceptions.RequestException as e:
-        print(f"ERRO de requisição OSRM entre {coord_origem} e {coord_destino}: {e}")
+        st.error(
+            f"Erro de requisição OSRM: {e}. O serviço pode estar indisponível ou você atingiu o limite de requisições."
+        )
         return None, None
 
 
-# --- Processo Principal ---
-def encontrar_loja_mais_proxima(end_candidato, lista_lojas):
-    print("--- Iniciando busca pela loja mais próxima ---")
+# --- Interface Streamlit ---
+st.set_page_config(page_title="Localizador de Loja Mais Próxima", page_icon="📍")
 
-    # 1. Geocodificar o endereço do candidato
-    print(f"\nGeocodificando endereço do candidato: '{end_candidato}'...")
-    coords_candidato = geocodificar_endereco(end_candidato)
-    if not coords_candidato:
-        return "Não foi possível geocodificar o endereço do candidato."
-    print(
-        f"Coordenadas do candidato: Lat {coords_candidato[0]:.4f}, Long {coords_candidato[1]:.4f}"
-    )
+st.title("📍 Localizador de Loja Mais Próxima")
+st.write(
+    "Insira o endereço do candidato para encontrar qual das suas lojas é a mais próxima pela rota."
+)
 
-    # 2. Geocodificar os endereços das lojas
-    coords_lojas = {}
-    print("\nGeocodificando endereços das lojas...")
-    for nome_loja, endereco_completo in lista_lojas.items():
-        print(f"  - {nome_loja}: '{endereco_completo}'")
-        coords = geocodificar_endereco(endereco_completo)
-        if coords:
-            coords_lojas[nome_loja] = coords
-            print(f"    -> Coordenadas: Lat {coords[0]:.4f}, Long {coords[1]:.4f}")
-        time.sleep(0.5)  # Pequena pausa para não sobrecarregar o Nominatim
+endereco_candidato_input = st.text_input(
+    "Endereço do Candidato (Ex: Rua da Paz, 20, Belo Horizonte, MG, Brasil)",
+    placeholder="Digite o endereço completo aqui...",
+)
 
-    if not coords_lojas:
-        return "Nenhuma loja pôde ser geocodificada."
-
-    # 3. Calcular distâncias de rota e encontrar a mais próxima
-    melhor_distancia_km = float("inf")
-    melhor_tempo_seg = float("inf")
-    loja_mais_proxima = None
-    distancias_detalhadas = {}
-
-    print("\nCalculando distâncias de rota com OSRM...")
-    for nome_loja, coords_loja in coords_lojas.items():
-        print(f"  - Calculando rota para: {nome_loja}...")
-        dist_km, tempo_seg = obter_distancia_osrm(coords_candidato, coords_loja)
-
-        if dist_km is not None and tempo_seg is not None:
-            distancias_detalhadas[nome_loja] = {
-                "distancia_km": dist_km,
-                "tempo_seg": tempo_seg,
-            }
-            print(
-                f"    -> Distância: {dist_km:.2f} km | Tempo: {tempo_seg / 60:.1f} min"
-            )
-
-            if dist_km < melhor_distancia_km:
-                melhor_distancia_km = dist_km
-                melhor_tempo_seg = tempo_seg
-                loja_mais_proxima = nome_loja
-        time.sleep(0.5)  # Pequena pausa para não sobrecarregar o OSRM
-
-    if loja_mais_proxima:
-        print("\n--- Resultado ---")
-        return (
-            f"A loja mais próxima do candidato é: **{loja_mais_proxima}**.\n"
-            f"Distância da rota: **{melhor_distancia_km:.2f} km**.\n"
-            f"Tempo de viagem estimado: **{melhor_tempo_seg / 60:.1f} minutos**."
-        )
+if st.button("Encontrar Loja Mais Próxima"):
+    if not endereco_candidato_input:
+        st.warning("Por favor, digite o endereço do candidato.")
     else:
-        return "Não foi possível determinar a loja mais próxima."
+        with st.spinner(
+            "Calculando a loja mais próxima... Isso pode levar alguns segundos."
+        ):
+            # 1. Geocodificar o endereço do candidato
+            coords_candidato = geocodificar_endereco(endereco_candidato_input)
 
+            if not coords_candidato:
+                st.error(
+                    "Não foi possível processar o endereço do candidato. Tente novamente."
+                )
+            else:
+                # 2. Geocodificar os endereços das lojas (se ainda não estiverem em cache)
+                coords_lojas = {}
+                for nome_loja, endereco_completo in enderecos_lojas.items():
+                    coords = geocodificar_endereco(endereco_completo)
+                    if coords:
+                        coords_lojas[nome_loja] = coords
+                    time.sleep(0.1)  # Pequena pausa para evitar sobrecarga no Nominatim
 
-# --- Executar a função ---
-resultado = encontrar_loja_mais_proxima(endereco_candidato, enderecos_lojas)
-print(resultado)
+                if not coords_lojas:
+                    st.error(
+                        "Nenhuma das lojas pôde ser geocodificada. Verifique os endereços pré-definidos."
+                    )
+                else:
+                    # 3. Calcular distâncias de rota e encontrar a mais próxima
+                    melhor_distancia_km = float("inf")
+                    melhor_tempo_seg = float("inf")
+                    loja_mais_proxima = None
+
+                    for nome_loja, coords_loja in coords_lojas.items():
+                        dist_km, tempo_seg = obter_distancia_osrm(
+                            coords_candidato, coords_loja
+                        )
+
+                        if dist_km is not None and tempo_seg is not None:
+                            if dist_km < melhor_distancia_km:
+                                melhor_distancia_km = dist_km
+                                melhor_tempo_seg = tempo_seg
+                                loja_mais_proxima = nome_loja
+                        time.sleep(0.1)  # Pequena pausa para evitar sobrecarga no OSRM
+
+                    if loja_mais_proxima:
+                        st.success("--- Resultado ---")
+                        st.markdown(
+                            f"A loja mais próxima do candidato é: **{loja_mais_proxima}**."
+                        )
+                        st.markdown(
+                            f"Distância da rota: **{melhor_distancia_km:.2f} km**."
+                        )
+                        st.markdown(
+                            f"Tempo de viagem estimado: **{melhor_tempo_seg / 60:.1f} minutos**."
+                        )
+                        st.info(
+                            "As distâncias são calculadas pela rota de carro e podem variar com o tráfego."
+                        )
+                    else:
+                        st.error(
+                            "Não foi possível determinar a loja mais próxima. Verifique os endereços e tente novamente."
+                        )
+
+st.markdown("---")
+st.markdown("Desenvolvido com ❤️ e Streamlit")
