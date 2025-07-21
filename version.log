@@ -27,3 +27,10 @@ Version
 - Enhanced data processing for candidate records.
 - Added timezone handling for candidate data processing.
 - Updated requirements.txt to include new dependencies.
+
+1.6.0 - 21/07/2025
+- Updated Nominatim user agent to v8.
+- Refactored geocoding and mapping functions for improved clarity and performance.
+- Streamlined candidate data input process.
+- Added new fields for candidate data in Google Sheets.
+- Improved error handling for geocoding and mapping functions.
