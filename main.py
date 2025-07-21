@@ -3,6 +3,7 @@ import os
 import time
 import json
 import traceback
+import unicodedata
 import streamlit as st
 import requests
 from geopy.geocoders import Nominatim
@@ -29,33 +30,83 @@ GOOGLE_LOG_SHEET_NAME = (
 BRAZIL_TIMEZONE = pytz.timezone("America/Sao_Paulo")
 
 # --- Seus 7 endereços de lojas ---
+# Mantenha os endereços o mais completos possível.
+# Acentuação será removida automaticamente pela função de normalização.
+# Se um endereço ainda falhar na geocodificação, verifique-o em um mapa online.
 enderecos_lojas = {
-    "Loja Lourdes": "Rua Marília de Dirceu, 161, Lourdes, Belo Horizonte, MG, Brasil",
+    "Loja Lourdes": "Rua Marilia de Dirceu, 161, Lourdes, Belo Horizonte, MG, Brasil",
     "Loja Anchieta": "Avenida dos Bandeirantes, 1733, Anchieta, Belo Horizonte, MG, Brasil",
     "Loja Savassi": "Rua Lavras, 96, Savassi, Belo Horizonte, MG, Brasil",
     "Loja Vila da Serra - Oscar Niemeyer": "Alameda Oscar Niemeyer, 1033, Vila da Serra, Nova Lima, MG, Brasil",
-    "Loja Santo Agostinho": "Avenida Olegário Maciel, 1600, Santo Agostinho, Belo Horizonte, MG, Brasil",
-    "Loja Vila da Serra - Dicíola": "R. Dicíola Horta, 77 - Vila da Serra, Belo Horizonte - MG, 30320-600, Brasil",
+    "Loja Santo Agostinho": "Avenida Olegario Maciel, 1600, Santo Agostinho, Belo Horizonte, MG, Brasil",
+    "Loja Vila da Serra - Diciola": "Rua Diciola Horta, 77, Belvedere, Belo Horizonte, MG, Brasil",
     "Loja Belvedere": "BR 356, 3049, Belvedere, Belo Horizonte, MG, Brasil",
 }
+
+# --- Funções Auxiliares ---
+
+
+def normalize_address(address):
+    """
+    Remove acentos, converte para minúsculas e remove espaços extras.
+    Ajuda o Nominatim a interpretar melhor.
+    """
+    if not isinstance(address, str):
+        return address
+    address = (
+        unicodedata.normalize("NFKD", address).encode("ascii", "ignore").decode("utf-8")
+    )
+    address = (
+        address.replace(".", "").replace(",", "").strip()
+    )  # Remove pontuação comum
+    address = " ".join(address.split())  # Remove múltiplos espaços
+    return address
+
 
 # --- Funções de Geocodificação e OSRM (com cache) ---
 
 
 @st.cache_data(ttl=3600)
-def geocodificar_endereco(endereco):
+def geocodificar_endereco(endereco_original):
+    endereco_normalizado = normalize_address(endereco_original)
     geolocator = Nominatim(user_agent=NOMINATIM_USER_AGENT)
     try:
-        location = geolocator.geocode(endereco, timeout=10)
+        location = geolocator.geocode(endereco_normalizado, timeout=10)
         if location:
             return location.latitude, location.longitude
-        st.warning(
-            f"Não foi possível geocodificar: '{endereco}'. Verifique a digitação ou tente um endereço mais completo (com cidade, estado e país)."
+
+        msg = (
+            f"❌ Falha na geocodificação de '{endereco_original}'. "
+            f"Tentado como '{endereco_normalizado}'. "
+            "Verifique a digitação, complete com cidade, estado e país. "
+            "Pode ser que o endereço não exista ou esteja mal formatado para a base de dados do Nominatim."
         )
+        st.warning(msg)
+        adicionar_log(endereco_original, "ERRO_GEOCODIFICACAO", msg)
         return None
     except (GeocoderTimedOut, GeocoderServiceError) as e:
-        st.error(
-            f"Erro de geocodificação para '{endereco}': {e}. Tente novamente mais tarde ou verifique sua conexão."
+        msg = (
+            f"🚨 Erro de serviço na geocodificação para '{endereco_original}': {e}. "
+            "O servidor de geocodificação pode estar temporariamente indisponível "
+            "ou a conexão de rede falhou. Tente novamente mais tarde."
+        )
+        st.error(msg)
+        adicionar_log(
+            endereco_original,
+            "ERRO_SERVICO_GEOCODIFICACAO",
+            msg + f" Traceback: {traceback.format_exc()}",
+        )
+        return None
+    except Exception as e:
+        msg = (
+            f"⛔ Erro inesperado ao geocodificar '{endereco_original}': {e}. "
+            "Isso pode indicar um problema interno. Por favor, contate o suporte."
+        )
+        st.error(msg)
+        adicionar_log(
+            endereco_original,
+            "ERRO_INESPERADO_GEOCODIFICACAO",
+            msg + f" Traceback: {traceback.format_exc()}",
         )
         return None
 
@@ -68,7 +119,7 @@ def obter_distancia_osrm(coord_origem, coord_destino):
     url = f"{OSRM_BASE_URL}{coord_origem[1]},{coord_origem[0]};{coord_destino[1]},{coord_destino[0]}?overview=full&steps=true&geometries=geojson"
     try:
         response = requests.get(url, timeout=10)
-        response.raise_for_status()
+        response.raise_for_status()  # Lança HTTPError para status de erro (4xx ou 5xx)
         data = response.json()
 
         if data and "routes" in data and len(data["routes"]) > 0:
@@ -84,16 +135,81 @@ def obter_distancia_osrm(coord_origem, coord_destino):
             ):
                 return distance_meters / 1000, duration_seconds, geometry
             else:
-                msg = f"AVISO OSRM: Dados de rota incompletos ou ausentes entre ({coord_origem[0]:.4f}, {coord_origem[1]:.4f}) e ({coord_destino[0]:.4f}, {coord_destino[1]:.4f})."
+                msg = (
+                    f"⚠️ OSRM: Dados de rota incompletos ou ausentes entre "
+                    f"Origem: ({coord_origem[0]:.4f}, {coord_origem[1]:.4f}) e "
+                    f"Destino: ({coord_destino[0]:.4f}, {coord_destino[1]:.4f}). "
+                    "A rota foi encontrada, mas informações essenciais estão faltando."
+                )
                 st.warning(msg)
+                adicionar_log(
+                    f"Coords OSRM: {coord_origem} -> {coord_destino}",
+                    "AVISO_OSRM_INCOMPLETO",
+                    msg,
+                )
                 return None, None, None
         else:
-            msg = f"AVISO OSRM: Nenhuma rota encontrada entre os pontos: ({coord_origem[0]:.4f}, {coord_origem[1]:.4f}) e ({coord_destino[0]:.4f}, {coord_destino[1]:.4f})."
+            msg = (
+                f"🚫 OSRM: Nenhuma rota encontrada entre "
+                f"Origem: ({coord_origem[0]:.4f}, {coord_origem[1]:.4f}) e "
+                f"Destino: ({coord_destino[0]:.4f}, {coord_destino[1]:.4f}). "
+                "Pode ser que os pontos estejam em locais inacessíveis por estrada ou muito distantes."
+            )
             st.warning(msg)
+            adicionar_log(
+                f"Coords OSRM: {coord_origem} -> {coord_destino}",
+                "AVISO_OSRM_SEM_ROTA",
+                msg,
+            )
             return None, None, None
-    except requests.exceptions.RequestException as e:
-        msg = f"ERRO de requisição OSRM entre ({coord_origem[0]:.4f}, {coord_origem[1]:.4f}) e ({coord_destino[0]:.4f}, {coord_destino[1]:.4f}): {e}. O serviço pode estar indisponível ou você atingiu o limite de requisições."
+    except requests.exceptions.HTTPError as e:
+        msg = (
+            f"❌ Erro HTTP OSRM ({e.response.status_code}) ao tentar rota de "
+            f"({coord_origem[0]:.4f}, {coord_origem[1]:.4f}) para ({coord_destino[0]:.4f}, {coord_destino[1]:.4f}): {e.response.text}. "
+            "Isso pode indicar um erro no servidor OSRM ou um problema com as coordenadas enviadas."
+        )
         st.error(msg)
+        adicionar_log(
+            f"Coords OSRM: {coord_origem} -> {coord_destino}",
+            "ERRO_HTTP_OSRM",
+            msg + f" Traceback: {traceback.format_exc()}",
+        )
+        return None, None, None
+    except requests.exceptions.ConnectionError as e:
+        msg = (
+            f"🚨 Erro de conexão OSRM de ({coord_origem[0]:.4f}, {coord_origem[1]:.4f}) para ({coord_destino[0]:.4f}, {coord_destino[1]:.4f}): {e}. "
+            "O serviço OSRM pode estar offline ou há um problema de rede."
+        )
+        st.error(msg)
+        adicionar_log(
+            f"Coords OSRM: {coord_origem} -> {coord_destino}",
+            "ERRO_CONEXAO_OSRM",
+            msg + f" Traceback: {traceback.format_exc()}",
+        )
+        return None, None, None
+    except requests.exceptions.Timeout as e:
+        msg = (
+            f"⏰ Tempo limite excedido para OSRM de ({coord_origem[0]:.4f}, {coord_origem[1]:.4f}) para ({coord_destino[0]:.4f}, {coord_destino[1]:.4f}): {e}. "
+            "A requisição demorou muito para responder. Tente novamente mais tarde."
+        )
+        st.error(msg)
+        adicionar_log(
+            f"Coords OSRM: {coord_origem} -> {coord_destino}",
+            "ERRO_TIMEOUT_OSRM",
+            msg + f" Traceback: {traceback.format_exc()}",
+        )
+        return None, None, None
+    except Exception as e:
+        msg = (
+            f"⛔ Erro inesperado OSRM de ({coord_origem[0]:.4f}, {coord_origem[1]:.4f}) para ({coord_destino[0]:.4f}, {coord_destino[1]:.4f}): {e}. "
+            "Contate o suporte."
+        )
+        st.error(msg)
+        adicionar_log(
+            f"Coords OSRM: {coord_origem} -> {coord_destino}",
+            "ERRO_INESPERADO_OSRM",
+            msg + f" Traceback: {traceback.format_exc()}",
+        )
         return None, None, None
 
 
@@ -110,24 +226,53 @@ def get_google_sheet_client():
             gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
         else:
             st.error(
-                f"Erro: Arquivo de credenciais '{GOOGLE_CREDENTIALS_FILE}' não encontrado "
+                f"🚫 Erro: Arquivo de credenciais '{GOOGLE_CREDENTIALS_FILE}' não encontrado "
                 "e secret 'GSPREAD_SERVICE_ACCOUNT_JSON' não configurado. Por favor, siga as instruções de configuração."
             )
             return None
         return gc
     except gspread.exceptions.APIError as e:
         st.error(
-            f"Erro de API ao autenticar no Google Sheets: {e}. Verifique suas credenciais e habilite as APIs necessárias (Sheets e Drive)."
+            f"🚫 Erro de API ao autenticar no Google Sheets: {e}. Verifique suas credenciais "
+            "e se as APIs necessárias (Google Sheets API e Google Drive API) estão habilitadas no Google Cloud Console."
+        )
+        adicionar_log(
+            "N/A",
+            "ERRO_AUTH_GSHEETS_API",
+            f"Erro de autenticação Google Sheets: {e}. Traceback: {traceback.format_exc()}",
         )
         return None
     except gspread.exceptions.SpreadsheetNotFound:
         st.error(
-            f"Planilha '{GOOGLE_LOG_SHEET_NAME}' não encontrada ao autenticar. Verifique o nome da planilha e se ela está compartilhada com o e-mail da conta de serviço."
+            f"🚫 Planilha '{GOOGLE_LOG_SHEET_NAME}' não encontrada. Verifique se o nome está correto "
+            "e se ela está compartilhada com o e-mail da sua conta de serviço do Google."
+        )
+        adicionar_log(
+            "N/A",
+            "ERRO_PLANILHA_NAO_ENCONTRADA",
+            f"Planilha '{GOOGLE_LOG_SHEET_NAME}' não encontrada. Traceback: {traceback.format_exc()}",
+        )
+        return None
+    except json.JSONDecodeError as e:
+        st.error(
+            f"🚫 Erro ao ler credenciais JSON: {e}. Verifique o formato do arquivo '{GOOGLE_CREDENTIALS_FILE}' "
+            "ou o conteúdo do secret 'GSPREAD_SERVICE_ACCOUNT_JSON'."
+        )
+        adicionar_log(
+            "N/A",
+            "ERRO_JSON_CREDENCIAL",
+            f"Erro de JSON nas credenciais: {e}. Traceback: {traceback.format_exc()}",
         )
         return None
     except Exception as e:
         st.error(
-            f"Erro inesperado ao autenticar no Google Sheets: {e}. Verifique suas credenciais e o formato do secret TOML."
+            f"⛔ Erro inesperado ao autenticar no Google Sheets: {e}. "
+            "Por favor, revise as configurações de credenciais."
+        )
+        adicionar_log(
+            "N/A",
+            "ERRO_INESPERADO_AUTH_GSHEETS",
+            f"Erro inesperado autenticação Google Sheets: {e}. Traceback: {traceback.format_exc()}",
         )
         return None
 
@@ -135,9 +280,8 @@ def get_google_sheet_client():
 def adicionar_log(endereco_pesquisado, status, mensagem_log=""):
     gc = get_google_sheet_client()
     if gc is None:
-        st.warning(
-            "Não foi possível adicionar o log: Cliente do Google Sheets não disponível."
-        )
+        # A mensagem já foi exibida por get_google_sheet_client()
+        # st.warning("Não foi possível adicionar o log: Cliente do Google Sheets não disponível.")
         return False
     try:
         sh = gc.open(GOOGLE_LOG_SHEET_NAME)
@@ -146,17 +290,33 @@ def adicionar_log(endereco_pesquisado, status, mensagem_log=""):
         # Obtém a hora atual no fuso horário de Brasília
         now_utc = datetime.datetime.now(pytz.utc)
         now_br = now_utc.astimezone(BRAZIL_TIMEZONE)
-        data_hora_br = now_br.strftime("%d/%m/%Y %H:%M")  # Formato de exibição
+        data_hora_br = now_br.strftime(
+            "%d/%m/%Y %H:%M:%S"
+        )  # Adicionado segundos para mais granularidade no log
 
         nova_linha = [data_hora_br, endereco_pesquisado, status, mensagem_log]
         worksheet.append_row(nova_linha)
         return True
+    except gspread.exceptions.APIError as e:
+        st.error(
+            f"🚫 Erro de API ao adicionar log no Google Sheets: {e}. "
+            "Verifique as permissões da conta de serviço na planilha. Detalhes no console."
+        )
+        print(f"ERRO DE LOG GSPREAD API: {e}\n{traceback.format_exc()}")
+        return False
+    except gspread.exceptions.WorksheetNotFound:
+        st.error(
+            f"🚫 Aba (worksheet) não encontrada na planilha '{GOOGLE_LOG_SHEET_NAME}'. "
+            "Verifique se a primeira aba existe ou se foi renomeada."
+        )
+        print(f"ERRO DE LOG WORKSHEET NOT FOUND: {traceback.format_exc()}")
+        return False
     except Exception as e:
         full_traceback = traceback.format_exc()  # Captura o traceback completo
-        st.error(f"Erro ao adicionar log no Google Sheets: {e}. Detalhes no console.")
-        print(
-            f"ERRO DE LOG NO GOOGLE SHEETS: {e}\n{full_traceback}"
-        )  # Imprime no console do servidor/terminal
+        st.error(
+            f"⛔ Erro inesperado ao adicionar log no Google Sheets: {e}. Detalhes no console."
+        )
+        print(f"ERRO INESPERADO DE LOG NO GOOGLE SHEETS: {e}\n{full_traceback}")
         return False
 
 
@@ -169,7 +329,9 @@ def gerar_mapa_pesquisa(
     endereco_loja_mais_proxima,
     geometry_route,
 ):
-    map_center = coords_candidato if coords_candidato else [-19.919, -43.938]
+    map_center = (
+        coords_candidato if coords_candidato else [-19.919, -43.938]
+    )  # Centro BH
     m = folium.Map(location=map_center, zoom_start=12)
 
     if coords_candidato:
@@ -187,6 +349,7 @@ def gerar_mapa_pesquisa(
         ).add_to(m)
 
     if geometry_route:
+        # A API OSRM retorna GeoJSON com [longitude, latitude], folium espera [latitude, longitude]
         inverted_coordinates = [
             [coord[1], coord[0]] for coord in geometry_route["coordinates"]
         ]
@@ -204,6 +367,7 @@ def gerar_mapa_pesquisa(
     if coords_loja_mais_proxima:
         all_coords_on_map.append(coords_loja_mais_proxima)
 
+    # Ajusta o zoom do mapa para incluir ambos os pontos, se existirem
     if len(all_coords_on_map) == 2:
         min_lat = min(p[0] for p in all_coords_on_map)
         max_lat = max(p[0] for p in all_coords_on_map)
@@ -212,7 +376,7 @@ def gerar_mapa_pesquisa(
         m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
     elif len(all_coords_on_map) == 1:
         m.location = all_coords_on_map[0]
-        m.zoom_start = 14
+        m.zoom_start = 14  # Zoom um pouco mais próximo para um único ponto
 
     st_folium(m, width=700, height=500)
 
@@ -223,7 +387,7 @@ st.set_page_config(
 )
 
 st.title("📍 Localizador de Loja Mais Próxima")
-st.write("Insira o endereço para encontrar a loja mais próxima.")
+st.write("Insira o endereço para encontrar a loja mais próxima do Candidato.")
 
 # Inicialização do session_state (se ainda não existirem)
 # Este bloco garante que os valores padrão são definidos apenas uma vez
@@ -241,47 +405,77 @@ with st.container():
     st.header("Endereço para Pesquisa")
     endereco_candidato_input = st.text_input(
         "Endereço (Ex: Avenida Afonso Pena, 1000, Centro, Belo Horizonte, MG, Brasil)",
-        placeholder="Digite o endereço completo como o do exemplo aqui...",
+        placeholder="Digite o endereço completo (rua, número, bairro, cidade, estado, país).",
+        help="Removeremos acentos e abreviações para melhor detecção. Ex: 'Rua' ao invés de 'R.'.",
         key="address_input",  # Mantém a chave para Streamlit
         value=st.session_state["current_address_input"],  # Conecta com o session_state
     )
 
     if st.button("Encontrar Loja"):
-        # Validação simples de endereço
-        if not endereco_candidato_input or len(endereco_candidato_input.strip()) < 5:
-            st.warning("Por favor, preencha um endereço válido e mais completo.")
-            adicionar_log(
-                endereco_candidato_input, "ERRO", "Endereço inválido/muito curto."
+        # Limpa resultados anteriores ao iniciar uma nova busca
+        st.session_state["results_displayed"] = False
+        st.session_state["loja_mais_proxima_data"] = None
+
+        if (
+            not endereco_candidato_input or len(endereco_candidato_input.strip()) < 10
+        ):  # Aumentei o mínimo para 10
+            st.warning(
+                "Por favor, preencha um endereço válido e mais completo (mínimo 10 caracteres)."
             )
-            # Não reseta o estado aqui para que o aviso seja visível
-            st.session_state["results_displayed"] = False
-            st.session_state["loja_mais_proxima_data"] = None
+            adicionar_log(
+                endereco_candidato_input,
+                "ERRO_VALIDACAO",
+                "Endereço inválido/muito curto.",
+            )
         else:
-            # Reseta o estado para uma nova pesquisa
-            st.session_state["results_displayed"] = False
-            st.session_state["loja_mais_proxima_data"] = None
+            # Normaliza o endereço do candidato ANTES de tentar geocodificar
+            endereco_candidato_normalizado = normalize_address(endereco_candidato_input)
+            st.info(
+                f"Tentando geocodificar o endereço: '{endereco_candidato_normalizado}'"
+            )
 
             with st.spinner(
-                "Calculando a loja mais próxima... Isso pode levar alguns segundos."
+                "Geocodificando seu endereço e das lojas. Isso pode levar alguns segundos..."
             ):
-                coords_candidato = geocodificar_endereco(endereco_candidato_input)
+                coords_candidato = geocodificar_endereco(
+                    endereco_candidato_input
+                )  # Passa o original para log e msg de erro
 
                 if not coords_candidato:
-                    error_msg = f"Não foi possível processar o endereço. A geocodificação falhou para '{endereco_candidato_input}'."
-                    st.error(error_msg)
-                    adicionar_log(endereco_candidato_input, "ERRO", error_msg)
+                    # Mensagem de erro já tratada dentro de geocodificar_endereco
+                    pass  # Não faz nada aqui, pois a função já exibiu o erro e logou
                 else:
                     coords_lojas = {}
-                    # Indicador de carregamento para geocodificação das lojas
-                    with st.spinner("Geocodificando endereços das lojas..."):
-                        for nome_loja, endereco_completo in enderecos_lojas.items():
-                            coords = geocodificar_endereco(endereco_completo)
-                            if coords:
-                                coords_lojas[nome_loja] = coords
-                            time.sleep(0.6)  # AJUSTADO PARA 0.6 SEGUNDOS
+                    lojas_nao_geocodificadas = []
+
+                    # Geocodificação das lojas
+                    for nome_loja, endereco_completo_loja in enderecos_lojas.items():
+                        coords = geocodificar_endereco(
+                            endereco_completo_loja
+                        )  # Passa o original da loja
+                        if coords:
+                            coords_lojas[nome_loja] = coords
+                        else:
+                            lojas_nao_geocodificadas.append(nome_loja)
+                        time.sleep(
+                            1
+                        )  # Atraso para respeitar a política de uso da API do Nominatim
+
+                    if lojas_nao_geocodificadas:
+                        msg_lojas = (
+                            f"⚠️ Aviso: As seguintes lojas não puderam ser geocodificadas e foram ignoradas: "
+                            f"{', '.join(lojas_nao_geocodificadas)}. "
+                            "Verifique os endereços pré-definidos dessas lojas."
+                        )
+                        st.warning(msg_lojas)
+                        adicionar_log(
+                            endereco_candidato_input,
+                            "AVISO_LOJAS_NAO_GEOCODIFICADAS",
+                            msg_lojas,
+                        )
 
                     if not coords_lojas:
-                        error_msg = "Nenhuma das lojas pôde ser geocodificada. Verifique os endereços pré-definidos das lojas."
+                        error_msg = "❌ Nenhuma das lojas pôde ser geocodificada. Não é possível calcular rotas. Verifique os endereços das lojas."
                         st.error(error_msg)
                         adicionar_log(endereco_candidato_input, "ERRO", error_msg)
                     else:
@@ -292,9 +486,10 @@ with st.container():
                         coords_loja_selecionada = None
                         geometry_rota_selecionada = None
 
-                        for i, (nome_loja, coords_loja) in enumerate(
-                            coords_lojas.items()
-                        ):
+                        rotas_com_problema = []
+
+                        # Cálculo das rotas para encontrar a mais próxima
+                        for nome_loja, coords_loja in coords_lojas.items():
                             dist_km, tempo_seg, geometry = obter_distancia_osrm(
                                 coords_candidato, coords_loja
                             )
@@ -309,7 +504,22 @@ with st.container():
                                     ]
                                     coords_loja_selecionada = coords_loja
                                     geometry_rota_selecionada = geometry
-                            time.sleep(0.6)  # AJUSTADO PARA 0.6 SEGUNDOS
+                            else:
+                                rotas_com_problema.append(nome_loja)
+                            time.sleep(
+                                1
+                            )  # Atraso para respeitar a política de uso da API do OSRM
+
+                        if rotas_com_problema:
+                            msg_rotas = (
+                                f"⚠️ Aviso: Não foi possível obter rota para as lojas: "
+                                f"{', '.join(rotas_com_problema)}. "
+                                "A loja mais próxima foi calculada apenas com as rotas bem-sucedidas."
+                            )
+                            st.warning(msg_rotas)
+                            adicionar_log(
+                                endereco_candidato_input, "AVISO_ROTAS_FALHA", msg_rotas
+                            )
 
                         if loja_mais_proxima_nome:
                             # Armazenar os dados na session_state
@@ -327,32 +537,34 @@ with st.container():
                             adicionar_log(
                                 endereco_candidato_input,
                                 "OK",
-                                f"Loja encontrada: {loja_mais_proxima_nome}",
+                                f"Sucesso: Loja encontrada: {loja_mais_proxima_nome}. Dist: {melhor_distancia_km:.2f} km.",
                             )
                             st.session_state["current_address_input"] = (
                                 ""  # Limpa o campo após sucesso
                             )
 
                         else:
-                            error_msg = "Não foi possível determinar a loja mais próxima. Verifique o endereço informado ou a disponibilidade dos serviços."
+                            error_msg = "❌ Não foi possível determinar a loja mais próxima. Todos os cálculos de rota falharam ou nenhuma loja pôde ser geocodificada. Por favor, revise o endereço pesquisado e os endereços das lojas."
                             st.error(error_msg)
-                            adicionar_log(endereco_candidato_input, "ERRO", error_msg)
-                            st.session_state["results_displayed"] = (
-                                False  # Garante que não exiba resultados incompletos
+                            adicionar_log(
+                                endereco_candidato_input,
+                                "ERRO_NAO_ENCONTRADO",
+                                error_msg,
                             )
+                            st.session_state["results_displayed"] = False
 
 # Exibir os resultados e o mapa se houver dados na session_state
 # Esta parte do código será executada sempre que a página for recarregada ou um botão for clicado
 if st.session_state["results_displayed"] and st.session_state["loja_mais_proxima_data"]:
     data = st.session_state["loja_mais_proxima_data"]
     st.success("--- Resultado da Pesquisa ---")
-    st.markdown(f"**Endereço Pesquisado:** {data['endereco_pesquisado']}")
+    st.markdown(f"**Endereço Pesquisado:** `{data['endereco_pesquisado']}`")
     st.markdown(
-        f"**Coordenadas:** Latitude: **{data['coords_candidato'][0]:.6f}**, Longitude: **{data['coords_candidato'][1]:.6f}**"
+        f"**Coordenadas da Origem:** Latitude: **{data['coords_candidato'][0]:.6f}**, Longitude: **{data['coords_candidato'][1]:.6f}**"
     )
     st.markdown(f"A loja mais próxima é: **{data['loja_mais_proxima_nome']}**.")
     st.markdown(
-        f"Endereço da Loja Mais Próxima: **{data['endereco_loja_selecionada']}**."
+        f"Endereço da Loja Mais Próxima: **`{data['endereco_loja_selecionada']}`**."
     )
     st.markdown(f"Distância da rota: **{data['melhor_distancia_km']:.2f} km**.")
     st.markdown(
