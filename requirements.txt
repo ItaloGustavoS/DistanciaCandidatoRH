@@ -5,4 +5,3 @@ gspread
 folium 
 oauth2client
 streamlit-folium
-json
