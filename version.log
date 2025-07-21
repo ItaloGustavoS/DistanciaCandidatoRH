@@ -34,3 +34,16 @@ Version
 - Streamlined candidate data input process.
 - Added new fields for candidate data in Google Sheets.
 - Improved error handling for geocoding and mapping functions.
+
+1.7.0 - 21/07/2025
+- Refactored geocoding and mapping functions for improved clarity and performance.
+- Streamlined candidate data input process.
+- Added new fields for candidate data in Google Sheets.
+- Improved error handling for geocoding and mapping functions.
+- Updated Nominatim user agent to v9.
+- Adjusted sleep duration for geocoding requests to comply with Nominatim's usage policy.
+- Refactored Google Sheets integration and improved error handling; updated Nominatim user agent to v9 and adjusted sleep duration for geocoding requests.
+- Added streamlit-folium for enhanced map visualization.
+- Updated requirements.txt to include pytz for timezone handling.
+- Added timezone handling for candidate data processing.
+- Improved error handling for Google Sheets data loading.
