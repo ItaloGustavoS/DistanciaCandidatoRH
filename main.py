@@ -15,7 +15,7 @@ from streamlit_folium import st_folium
 # API pública do OSRM
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1/driving/"
 # User-Agent para o Nominatim
-NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v3"  # Alterado para v3 para indicar a versão com as últimas correções
+NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v4"  # Alterado para v4
 
 # Nome do arquivo JSON com as credenciais do Google Sheets
 GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
@@ -23,7 +23,6 @@ GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 GOOGLE_SHEET_NAME = "Dados Candidatos Lojas"
 
 # --- Seus 7 endereços de lojas ---
-# Mantenha os endereços o mais completo possível para melhor geocodificação
 enderecos_lojas = {
     "Loja Centro": "Rua dos Tamoios, 300, Centro, Belo Horizonte, MG, Brasil",
     "Loja Savassi": "Rua Pernambuco, 1000, Savassi, Belo Horizonte, MG, Brasil",
@@ -43,7 +42,6 @@ def geocodificar_endereco(endereco):
     try:
         location = geolocator.geocode(endereco, timeout=10)
         if location:
-            # Inclui a coordenada na mensagem de aviso para depuração
             st.info(
                 f"Endereço '{endereco}' geocodificado para: ({location.latitude:.4f}, {location.longitude:.4f})"
             )
@@ -64,12 +62,10 @@ def obter_distancia_osrm(coord_origem, coord_destino):
     if not coord_origem or not coord_destino:
         return None, None, None
 
-    # OSRM espera longitude,latitude. geopy retorna latitude,longitude
-    # overview=full para garantir que a geometria esteja sempre presente se a rota for encontrada.
     url = f"{OSRM_BASE_URL}{coord_origem[1]},{coord_origem[0]};{coord_destino[1]},{coord_destino[0]}?overview=full&steps=true&geometries=geojson"
     try:
         response = requests.get(url, timeout=10)
-        response.raise_for_status()  # Levanta um erro para status HTTP 4xx/5xx
+        response.raise_for_status()
         data = response.json()
 
         if data and "routes" in data and len(data["routes"]) > 0:
@@ -107,11 +103,7 @@ def obter_distancia_osrm(coord_origem, coord_destino):
 @st.cache_resource
 def get_google_sheet_client():
     try:
-        # Tenta carregar as credenciais de st.secrets (para hospedagem)
-        # ou do arquivo local (para desenvolvimento local)
-        if (
-            "GSPREAD_SERVICE_ACCOUNT_JSON" in st.secrets
-        ):  # Usando st.secrets para compatibilidade com secrets.toml
+        if "GSPREAD_SERVICE_ACCOUNT_JSON" in st.secrets:
             credentials_json_str = st.secrets["GSPREAD_SERVICE_ACCOUNT_JSON"]
             gc = gspread.service_account_from_dict(json.loads(credentials_json_str))
         elif os.path.exists(GOOGLE_CREDENTIALS_FILE):
@@ -128,7 +120,7 @@ def get_google_sheet_client():
             f"Erro de API ao autenticar no Google Sheets: {e}. Verifique suas credenciais e habilite as APIs necessárias (Sheets e Drive)."
         )
         return None
-    except gspread.exceptions.SpreadsheetNotFound as e:
+    except gspread.exceptions.SpreadsheetNotFound:
         st.error(
             f"Planilha '{GOOGLE_SHEET_NAME}' não encontrada ao autenticar. Verifique o nome da planilha e se ela está compartilhada com o e-mail da conta de serviço."
         )
@@ -140,18 +132,16 @@ def get_google_sheet_client():
         return None
 
 
-@st.cache_data(ttl=60)  # Cacheia o DataFrame por 60 segundos
+@st.cache_data(ttl=60)
 def carregar_dados_candidatos():
     gc = get_google_sheet_client()
     if gc is None:
-        return pd.DataFrame()  # Retorna DataFrame vazio em caso de erro
+        return pd.DataFrame()
 
     try:
         sh = gc.open(GOOGLE_SHEET_NAME)
-        worksheet = sh.sheet1  # Pega a primeira aba
-        dados = (
-            worksheet.get_all_records()
-        )  # Obtém todos os dados como lista de dicionários
+        worksheet = sh.sheet1
+        dados = worksheet.get_all_records()
         df = pd.DataFrame(dados)
         return df
     except gspread.exceptions.SpreadsheetNotFound:
@@ -181,7 +171,7 @@ def adicionar_candidato(nome, endereco, loja_mais_proxima, distancia, tempo):
             data_hora,
         ]
         worksheet.append_row(nova_linha)
-        st.cache_data.clear()  # Limpa o cache para recarregar os dados
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"Erro ao adicionar candidato no Google Sheets: {e}")
@@ -195,13 +185,10 @@ def limpar_dados_candidatos():
     try:
         sh = gc.open(GOOGLE_SHEET_NAME)
         worksheet = sh.sheet1
-        # Obtém todos os valores para verificar se há algo além dos cabeçalhos
         all_values = worksheet.get_all_values()
-        if len(all_values) > 1:  # Se há mais de uma linha (cabeçalho + dados)
-            worksheet.delete_rows(
-                2, len(all_values)
-            )  # Apaga todas as linhas a partir da segunda
-            st.cache_data.clear()  # Limpa o cache
+        if len(all_values) > 1:
+            worksheet.delete_rows(2, len(all_values))
+            st.cache_data.clear()
             st.success("Dados do histórico apagados com sucesso!")
             return True
         else:
@@ -210,6 +197,91 @@ def limpar_dados_candidatos():
     except Exception as e:
         st.error(f"Erro ao limpar dados do Google Sheets: {e}")
         return False
+
+
+# --- Nova Função para Gerar o Mapa do Histórico ---
+def gerar_mapa_historico(df_historico, enderecos_lojas_dict):
+    if df_historico.empty:
+        st.warning("Não há dados no histórico para gerar o mapa.")
+        return
+
+    # Inicia o mapa centrado em BH ou na primeira coordenada válida encontrada
+    map_center = [-19.919, -43.938]  # Default para BH
+
+    # Lista para armazenar todas as coordenadas para o ajuste do zoom
+    all_coords_on_map = []
+
+    m = folium.Map(location=map_center, zoom_start=12)
+
+    # Adicionar marcadores das lojas
+    lojas_coordenadas_cache = {}
+    for nome_loja, endereco_completo in enderecos_lojas_dict.items():
+        coords_loja = geocodificar_endereco(endereco_completo)
+        if coords_loja:
+            lojas_coordenadas_cache[nome_loja] = coords_loja
+            folium.Marker(
+                [coords_loja[0], coords_loja[1]],
+                tooltip=f"Loja: {nome_loja}<br>Endereço: {endereco_completo}<br>Coordenadas: ({coords_loja[0]:.4f}, {coords_loja[1]:.4f})",
+                icon=folium.Icon(color="red", icon="store", prefix="fa"),
+            ).add_to(m)
+            all_coords_on_map.append(coords_loja)
+
+    # Adicionar marcadores dos candidatos
+    for index, row in df_historico.iterrows():
+        nome = row["Nome"]
+        endereco = row["Endereço"]
+        loja_mais_proxima = row["Loja Mais Próxima"]
+
+        coords_candidato = geocodificar_endereco(endereco)
+        if coords_candidato:
+            folium.Marker(
+                [coords_candidato[0], coords_candidato[1]],
+                tooltip=f"Candidato: {nome}<br>Endereço: {endereco}<br>Loja Mais Próxima: {loja_mais_proxima}<br>Coordenadas: ({coords_candidato[0]:.4f}, {coords_candidato[1]:.4f})",
+                icon=folium.Icon(color="blue", icon="user", prefix="fa"),
+            ).add_to(m)
+            all_coords_on_map.append(coords_candidato)
+
+            # Opcional: Desenhar rota do candidato para a loja mais próxima (pode ser lento se muitos candidatos)
+            if loja_mais_proxima in lojas_coordenadas_cache:
+                coords_loja_selecionada = lojas_coordenadas_cache[loja_mais_proxima]
+                # A função obter_distancia_osrm precisa de otimização para não recarregar toda vez
+                # e também cuidado com o limite de requests para muitos pontos.
+                # Para este mapa, vamos tentar buscar a rota, mas esteja ciente das limitações
+                dist_km, tempo_seg, geometry = obter_distancia_osrm(
+                    coords_candidato, coords_loja_selecionada
+                )
+                if geometry:
+                    inverted_coordinates = [
+                        [coord[1], coord[0]] for coord in geometry["coordinates"]
+                    ]
+                    folium.PolyLine(
+                        inverted_coordinates,
+                        color="purple",  # Cor diferente para rotas históricas
+                        weight=3,
+                        opacity=0.5,
+                        tooltip=f"Rota para {loja_mais_proxima}: {dist_km:.2f} km",
+                    ).add_to(m)
+                time.sleep(
+                    0.1
+                )  # Pequena pausa entre cada rota para evitar hitting API limits
+        time.sleep(0.1)  # Pequena pausa entre cada candidato geocodificado
+
+    # Ajusta o mapa para mostrar todos os pontos adicionados
+    if all_coords_on_map:
+        m.fit_bounds(
+            [
+                [
+                    min(p[0] for p in all_coords_on_map),
+                    min(p[1] for p in all_coords_on_map),
+                ],
+                [
+                    max(p[0] for p in all_coords_on_map),
+                    max(p[1] for p in all_coords_on_map),
+                ],
+            ]
+        )
+
+    st_folium(m, width=700, height=500)
 
 
 # --- Interface Streamlit ---
@@ -259,7 +331,7 @@ with st.container():
                         coords = geocodificar_endereco(endereco_completo)
                         if coords:
                             coords_lojas[nome_loja] = coords
-                        time.sleep(0.5)  # Pequena pausa para Nominatim
+                        time.sleep(0.5)  # Pausa para Nominatim
 
                     if not coords_lojas:
                         st.error(
@@ -277,36 +349,24 @@ with st.container():
                         melhor_distancia_km = float("inf")
                         melhor_tempo_seg = float("inf")
                         loja_mais_proxima = None
-                        geometria_rota_mais_curta = None
 
                         progress_bar = st.progress(0)
-                        lojas_com_rotas_validas = {}  # Para usar no mapa
 
                         for i, (nome_loja, coords_loja) in enumerate(
                             coords_lojas.items()
                         ):
-                            # Passa coords_loja para a mensagem de erro do OSRM, se necessário
-                            dist_km, tempo_seg, geometry = obter_distancia_osrm(
-                                coords_candidato, coords_loja
+                            dist_km, tempo_seg, _ = (
+                                obter_distancia_osrm(  # Não precisamos da geometria aqui
+                                    coords_candidato, coords_loja
+                                )
                             )
 
-                            if (
-                                dist_km is not None
-                                and tempo_seg is not None
-                                and geometry is not None
-                            ):
-                                lojas_com_rotas_validas[nome_loja] = {
-                                    "coords": coords_loja,
-                                    "dist_km": dist_km,
-                                    "tempo_seg": tempo_seg,
-                                    "geometry": geometry,
-                                }
+                            if dist_km is not None and tempo_seg is not None:
                                 if dist_km < melhor_distancia_km:
                                     melhor_distancia_km = dist_km
                                     melhor_tempo_seg = tempo_seg
                                     loja_mais_proxima = nome_loja
-                                    geometria_rota_mais_curta = geometry
-                            time.sleep(0.5)  # Pequena pausa para OSRM
+                            time.sleep(0.5)  # Pausa para OSRM
                             progress_bar.progress((i + 1) / len(coords_lojas))
 
                         if loja_mais_proxima:
@@ -330,90 +390,13 @@ with st.container():
                                 loja_mais_proxima,
                                 melhor_distancia_km,
                                 melhor_tempo_seg / 60,
-                            ):  # Tempo em minutos
+                            ):
                                 st.success(
                                     "Dados do candidato registrados com sucesso no Google Sheets!"
                                 )
-                                # Atualiza o estado para forçar o recarregamento do histórico
                                 st.session_state["data_updated"] = True
                             else:
                                 st.error("Falha ao registrar dados no Google Sheets.")
-
-                            # --- Visualização no Mapa ---
-                            st.subheader("Visualização no Mapa")
-                            # Centraliza o mapa no candidato ou em BH se não houver candidato
-                            map_center = [coords_candidato[0], coords_candidato[1]]
-                            m = folium.Map(location=map_center, zoom_start=12)
-
-                            # Marcador do Candidato
-                            folium.Marker(
-                                [coords_candidato[0], coords_candidato[1]],
-                                tooltip=f"Candidato: {nome_candidato_input}<br>Endereço: {endereco_candidato_input}<br>Coordenadas: ({coords_candidato[0]:.4f}, {coords_candidato[1]:.4f})",
-                                icon=folium.Icon(
-                                    color="blue", icon="user", prefix="fa"
-                                ),
-                            ).add_to(m)
-
-                            # Marcadores das Lojas (apenas as que tiveram rota válida ou geocodificação)
-                            for (
-                                nome_loja,
-                                coords_loja,
-                            ) in (
-                                coords_lojas.items()
-                            ):  # Itera sobre todas as lojas que foram geocodificadas
-                                color = (
-                                    "green" if nome_loja == loja_mais_proxima else "red"
-                                )
-                                icon = (
-                                    "store"
-                                    if nome_loja == loja_mais_proxima
-                                    else "map-marker"
-                                )
-                                folium.Marker(
-                                    [coords_loja[0], coords_loja[1]],
-                                    tooltip=f"Loja: {nome_loja}<br>Endereço: {enderecos_lojas[nome_loja]}<br>Coordenadas: ({coords_loja[0]:.4f}, {coords_loja[1]:.4f})",
-                                    icon=folium.Icon(
-                                        color=color, icon=icon, prefix="fa"
-                                    ),
-                                ).add_to(m)
-
-                            # Adicionar rota mais curta ao mapa
-                            if geometria_rota_mais_curta:
-                                # OSRM retorna GeoJSON, que usa [longitude, latitude], folium precisa [latitude, longitude]
-                                inverted_coordinates = [
-                                    [coord[1], coord[0]]
-                                    for coord in geometria_rota_mais_curta[
-                                        "coordinates"
-                                    ]
-                                ]
-                                folium.PolyLine(
-                                    inverted_coordinates,
-                                    color="blue",
-                                    weight=5,
-                                    opacity=0.7,
-                                    tooltip=f"Rota para {loja_mais_proxima}: {melhor_distancia_km:.2f} km",
-                                ).add_to(m)
-
-                            # Ajusta o mapa para mostrar todos os pontos
-                            # Inclui o candidato e todas as lojas que foram geocodificadas com sucesso
-                            # `bounds` deve conter todas as coordenadas que você quer que o mapa exiba
-                            bounds = [coords_candidato] + list(coords_lojas.values())
-                            if bounds:  # Garante que há pontos para ajustar o mapa
-                                m.fit_bounds(
-                                    [
-                                        [
-                                            min(p[0] for p in bounds),
-                                            min(p[1] for p in bounds),
-                                        ],
-                                        [
-                                            max(p[0] for p in bounds),
-                                            max(p[1] for p in bounds),
-                                        ],
-                                    ]
-                                )
-
-                            st_folium(m, width=700, height=500)
-
                         else:
                             st.error(
                                 "Não foi possível determinar a loja mais próxima. Verifique os endereços informados, os serviços de geocodificação (Nominatim) e de rota (OSRM) e tente novamente."
@@ -423,27 +406,43 @@ with st.container():
 st.markdown("---")
 st.header("📊 Histórico de Candidatos")
 
-# Botão para recarregar ou para indicar atualização
-if st.button("Atualizar Histórico"):
-    st.cache_data.clear()
-    st.session_state["data_updated"] = True  # Força o recarregamento
-
-dados_historico = carregar_dados_candidatos()
-
-if not dados_historico.empty:
-    st.dataframe(dados_historico, use_container_width=True)
+# Botões de controle para o histórico e mapa
+col_hist1, col_hist2, col_hist3 = st.columns([1, 1, 3])
+with col_hist1:
+    if st.button("Atualizar Histórico"):
+        st.cache_data.clear()
+        st.session_state["data_updated"] = True
+with col_hist2:
     if st.button(
         "Limpar Histórico de Candidatos",
         help="Isso apagará TODOS os dados no Google Sheets para esta aplicação.",
     ):
         if limpar_dados_candidatos():
-            st.session_state["data_updated"] = (
-                True  # Força o recarregamento após limpar
-            )
+            st.session_state["data_updated"] = True
+            st.session_state["show_map"] = False  # Esconde o mapa após limpar
+with col_hist3:
+    if st.button("Gerar Mapa Histórico"):
+        st.session_state["show_map"] = True  # Define uma flag para exibir o mapa
+
+dados_historico = carregar_dados_candidatos()
+
+if not dados_historico.empty:
+    st.dataframe(dados_historico, use_container_width=True)
 else:
     st.info(
         "Nenhum dado de candidato encontrado no histórico. Faça uma pesquisa acima para começar."
     )
 
-st.markdown("---")
+# --- Exibição Condicional do Mapa ---
+if "show_map" not in st.session_state:
+    st.session_state["show_map"] = False
+
+if st.session_state["show_map"]:
+    st.markdown("---")
+    st.subheader("🌍 Mapa do Histórico de Candidatos e Lojas")
+    with st.spinner("Gerando mapa com todos os pontos..."):
+        gerar_mapa_historico(dados_historico, enderecos_lojas)
+    st.markdown("---")
+
+
 st.markdown("Desenvolvido com ❤️ e Streamlit")
