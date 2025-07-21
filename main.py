@@ -15,12 +15,14 @@ import gspread
 # API pública do OSRM
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1/driving/"
 # User-Agent para o Nominatim
-NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v9"
+NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v11"  # Versão atualizada
 
 # Nome do arquivo JSON com as credenciais do Google Sheets
 GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 # Nome da sua planilha do Google Sheets para o LOG (pode ser a mesma ou uma nova)
-GOOGLE_LOG_SHEET_NAME = "Log Pesquisas Lojas"
+GOOGLE_LOG_SHEET_NAME = (
+    "Log Pesquisas Lojas"  # Mantenha este nome consistente com sua planilha
+)
 
 # Fuso horário de Brasília
 BRAZIL_TIMEZONE = pytz.timezone("America/Sao_Paulo")
@@ -147,7 +149,6 @@ def adicionar_log(endereco_pesquisado, status, mensagem_log=""):
 
         nova_linha = [data_hora_br, endereco_pesquisado, status, mensagem_log]
         worksheet.append_row(nova_linha)
-        # Não limpar o cache de dados aqui, pois não estamos usando cache para este log
         return True
     except Exception as e:
         st.error(f"Erro ao adicionar log no Google Sheets: {e}")
@@ -225,9 +226,20 @@ with st.container():
     endereco_candidato_input = st.text_input(
         "Endereço (Ex: Avenida Afonso Pena, 1000, Centro, Belo Horizonte, MG, Brasil)",
         placeholder="Digite o endereço completo como o do exemplo aqui...",
+        key="address_input",
     )
 
+    # Use st.session_state para armazenar os resultados e exibi-los
+    if "results_displayed" not in st.session_state:
+        st.session_state["results_displayed"] = False
+        st.session_state["loja_mais_proxima_data"] = (
+            None  # Para guardar os dados da pesquisa
+        )
+
     if st.button("Encontrar Loja"):
+        st.session_state["results_displayed"] = False  # Resetar para nova pesquisa
+        st.session_state["loja_mais_proxima_data"] = None
+
         if not endereco_candidato_input:
             st.warning("Por favor, preencha o endereço para pesquisa.")
             adicionar_log(endereco_candidato_input, "ERRO", "Endereço não preenchido.")
@@ -242,17 +254,12 @@ with st.container():
                     st.error(error_msg)
                     adicionar_log(endereco_candidato_input, "ERRO", error_msg)
                 else:
-                    st.markdown(f"**Endereço Pesquisado:** {endereco_candidato_input}")
-                    st.markdown(
-                        f"**Coordenadas:** Latitude: **{coords_candidato[0]:.6f}**, Longitude: **{coords_candidato[1]:.6f}**"
-                    )
-
                     coords_lojas = {}
                     for nome_loja, endereco_completo in enderecos_lojas.items():
                         coords = geocodificar_endereco(endereco_completo)
                         if coords:
                             coords_lojas[nome_loja] = coords
-                        time.sleep(1)  # <<<<<< AJUSTADO PARA 1 SEGUNDO
+                        time.sleep(0.6)  # AJUSTADO PARA 0.6 SEGUNDOS
 
                     if not coords_lojas:
                         error_msg = "Nenhuma das lojas pôde ser geocodificada. Verifique os endereços pré-definidos das lojas."
@@ -266,7 +273,8 @@ with st.container():
                         coords_loja_selecionada = None
                         geometry_rota_selecionada = None
 
-                        progress_bar = st.progress(0)
+                        # Barra de progresso removida
+                        # progress_bar = st.progress(0)
 
                         for i, (nome_loja, coords_loja) in enumerate(
                             coords_lojas.items()
@@ -285,35 +293,22 @@ with st.container():
                                     ]
                                     coords_loja_selecionada = coords_loja
                                     geometry_rota_selecionada = geometry
-                            time.sleep(1)  # <<<<<< AJUSTADO PARA 1 SEGUNDO
-                            progress_bar.progress((i + 1) / len(coords_lojas))
+                            time.sleep(0.6)  # AJUSTADO PARA 0.6 SEGUNDOS
+                            # progress_bar.progress((i + 1) / len(coords_lojas)) # Atualização da barra de progresso removida
 
                         if loja_mais_proxima_nome:
-                            st.success("--- Resultado da Pesquisa ---")
-                            st.markdown(
-                                f"A loja mais próxima é: **{loja_mais_proxima_nome}**."
-                            )
-                            st.markdown(
-                                f"Endereço da Loja Mais Próxima: **{endereco_loja_selecionada}**."
-                            )
-                            st.markdown(
-                                f"Distância da rota: **{melhor_distancia_km:.2f} km**."
-                            )
-                            st.markdown(
-                                f"Tempo de viagem estimado: **{melhor_tempo_seg / 60:.1f} minutos**."
-                            )
-
-                            st.markdown("---")
-                            st.subheader("🌍 Mapa da Rota")
-                            gerar_mapa_pesquisa(
-                                coords_candidato,
-                                endereco_candidato_input,
-                                loja_mais_proxima_nome,
-                                coords_loja_selecionada,
-                                endereco_loja_selecionada,
-                                geometry_rota_selecionada,
-                            )
-                            st.markdown("---")
+                            # Armazenar os dados na session_state
+                            st.session_state["loja_mais_proxima_data"] = {
+                                "endereco_pesquisado": endereco_candidato_input,
+                                "coords_candidato": coords_candidato,
+                                "loja_mais_proxima_nome": loja_mais_proxima_nome,
+                                "endereco_loja_selecionada": endereco_loja_selecionada,
+                                "coords_loja_selecionada": coords_loja_selecionada,
+                                "melhor_distancia_km": melhor_distancia_km,
+                                "melhor_tempo_seg": melhor_tempo_seg,
+                                "geometry_rota_selecionada": geometry_rota_selecionada,
+                            }
+                            st.session_state["results_displayed"] = True
                             adicionar_log(
                                 endereco_candidato_input,
                                 "OK",
@@ -324,5 +319,38 @@ with st.container():
                             error_msg = "Não foi possível determinar a loja mais próxima. Verifique o endereço informado ou a disponibilidade dos serviços."
                             st.error(error_msg)
                             adicionar_log(endereco_candidato_input, "ERRO", error_msg)
+
+    # Exibir os resultados e o mapa se houver dados na session_state
+    if (
+        st.session_state["results_displayed"]
+        and st.session_state["loja_mais_proxima_data"]
+    ):
+        data = st.session_state["loja_mais_proxima_data"]
+        st.success("--- Resultado da Pesquisa ---")
+        st.markdown(f"**Endereço Pesquisado:** {data['endereco_pesquisado']}")
+        st.markdown(
+            f"**Coordenadas:** Latitude: **{data['coords_candidato'][0]:.6f}**, Longitude: **{data['coords_candidato'][1]:.6f}**"
+        )
+        st.markdown(f"A loja mais próxima é: **{data['loja_mais_proxima_nome']}**.")
+        st.markdown(
+            f"Endereço da Loja Mais Próxima: **{data['endereco_loja_selecionada']}**."
+        )
+        st.markdown(f"Distância da rota: **{data['melhor_distancia_km']:.2f} km**.")
+        st.markdown(
+            f"Tempo de viagem estimado: **{data['melhor_tempo_seg'] / 60:.1f} minutos**."
+        )
+
+        st.markdown("---")
+        st.subheader("🌍 Mapa da Rota")
+        gerar_mapa_pesquisa(
+            data["coords_candidato"],
+            data["endereco_pesquisado"],
+            data["loja_mais_proxima_nome"],
+            data["coords_loja_selecionada"],
+            data["endereco_loja_selecionada"],
+            data["geometry_rota_selecionada"],
+        )
+        st.markdown("---")
+
 
 st.markdown("Desenvolvido com ❤️ e Streamlit")
