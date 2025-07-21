@@ -1,14 +1,15 @@
+import datetime
+import os
+import time
 import streamlit as st
 import requests
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
-import time
 import gspread
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-import datetime
-import os  # Para acessar variáveis de ambiente
+
 
 # --- Configurações ---
 # API pública do OSRM (lembre-se dos limites de uso!)
