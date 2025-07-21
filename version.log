@@ -5,3 +5,7 @@ Version
 1.1.0 - 21/07/2025
 - Added support for multiple geocoding services.
 - Improved error handling for geocoding failures.
+
+1.2.0 - 21/07/2025
+- Enhanced user interface for better usability.
+- Added unit tests for core functionalities.
