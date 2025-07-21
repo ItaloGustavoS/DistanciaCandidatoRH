@@ -15,3 +15,8 @@ Version
 - Added historical map generation feature.
 - Improved error handling for map generation failures
 - Updated dependencies to latest versions.
+
+1.4.0 - 21/07/2025
+- Added timezone handling for Brasília.
+- Updated Nominatim user agent to v6.
+- Enhanced Google Sheets data loading with flexible column mapping and new fields for candidate data.

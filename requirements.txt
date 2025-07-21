@@ -1,7 +1,8 @@
-streamlit 
-requests 
+streamlit
+requests
 geopy
-gspread 
-folium 
+gspread
+folium
 oauth2client
 streamlit-folium
+pytz
