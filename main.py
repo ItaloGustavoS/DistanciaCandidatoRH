@@ -15,7 +15,7 @@ from streamlit_folium import st_folium
 # API pública do OSRM
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1/driving/"
 # User-Agent para o Nominatim
-NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v4"  # Alterado para v4
+NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v5"  # Alterado para v5
 
 # Nome do arquivo JSON com as credenciais do Google Sheets
 GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
@@ -141,8 +141,56 @@ def carregar_dados_candidatos():
     try:
         sh = gc.open(GOOGLE_SHEET_NAME)
         worksheet = sh.sheet1
-        dados = worksheet.get_all_records()
-        df = pd.DataFrame(dados)
+        # Obtém todos os valores para inspecionar os cabeçalhos
+        all_values = worksheet.get_all_values()
+        if not all_values:  # Planilha vazia
+            return pd.DataFrame()
+
+        # A primeira linha são os cabeçalhos
+        headers = all_values[0]
+        data_rows = all_values[1:]  # O resto são os dados
+
+        df = pd.DataFrame(data_rows, columns=headers)
+
+        # Padroniza os nomes das colunas esperadas para evitar KeyError
+        # Mapeamento de possíveis nomes de coluna para nomes padronizados
+        column_mapping = {
+            "Nome": "Nome",
+            "Endereço": "Endereço",
+            "Loja Mais Próxima": "Loja Mais Próxima",
+            "Distância (km)": "Distância (km)",
+            "Tempo (min)": "Tempo (min)",
+            "Data/Hora Registro": "Data/Hora Registro",
+        }
+
+        # Converte todos os cabeçalhos do DF para minúsculas para comparação flexível
+        df.columns = [col.strip().replace(" ", "_").lower() for col in df.columns]
+
+        # Renomeia as colunas para os nomes padronizados esperados, se existirem
+        expected_columns = {
+            "nome": "Nome",
+            "endereço": "Endereço",
+            "loja_mais_proxima": "Loja Mais Próxima",
+            "distancia_(km)": "Distância (km)",
+            "tempo_(min)": "Tempo (min)",
+            "data/hora_registro": "Data/Hora Registro",
+        }
+
+        # Filtra apenas as colunas que realmente existem no DataFrame
+        cols_to_rename = {k: v for k, v in expected_columns.items() if k in df.columns}
+        df.rename(columns=cols_to_rename, inplace=True)
+
+        # Verifica se as colunas essenciais para o mapa existem após a renomeação
+        required_columns = ["Nome", "Endereço", "Loja Mais Próxima"]
+        if not all(col in df.columns for col in required_columns):
+            st.warning(
+                f"As colunas necessárias para o mapa ({', '.join(required_columns)}) não foram encontradas no Google Sheet. Verifique os cabeçalhos da sua planilha."
+            )
+            return pd.DataFrame(
+                columns=required_columns
+                + ["Distância (km)", "Tempo (min)", "Data/Hora Registro"]
+            )  # Retorna DF com colunas esperadas mas vazio
+
         return df
     except gspread.exceptions.SpreadsheetNotFound:
         st.error(
@@ -170,6 +218,8 @@ def adicionar_candidato(nome, endereco, loja_mais_proxima, distancia, tempo):
             f"{tempo:.1f}",
             data_hora,
         ]
+        # Adiciona a nova linha. Assume que a ordem das colunas no Sheet é a mesma da nova_linha.
+        # É crucial que os cabeçalhos do Sheet correspondam à ordem que você está enviando aqui.
         worksheet.append_row(nova_linha)
         st.cache_data.clear()
         return True
@@ -214,7 +264,7 @@ def gerar_mapa_historico(df_historico, enderecos_lojas_dict):
     m = folium.Map(location=map_center, zoom_start=12)
 
     # Adicionar marcadores das lojas
-    lojas_coordenadas_cache = {}
+    lojas_coordenadas_cache = {}  # Cache local para as coordenadas das lojas
     for nome_loja, endereco_completo in enderecos_lojas_dict.items():
         coords_loja = geocodificar_endereco(endereco_completo)
         if coords_loja:
@@ -228,9 +278,10 @@ def gerar_mapa_historico(df_historico, enderecos_lojas_dict):
 
     # Adicionar marcadores dos candidatos
     for index, row in df_historico.iterrows():
-        nome = row["Nome"]
-        endereco = row["Endereço"]
-        loja_mais_proxima = row["Loja Mais Próxima"]
+        # Acessa as colunas usando os nomes padronizados
+        nome = row.get("Nome", "Nome Desconhecido")  # Usa .get() para segurança
+        endereco = row.get("Endereço", "Endereço Desconhecido")
+        loja_mais_proxima = row.get("Loja Mais Próxima", "Loja Desconhecida")
 
         coords_candidato = geocodificar_endereco(endereco)
         if coords_candidato:
@@ -244,9 +295,8 @@ def gerar_mapa_historico(df_historico, enderecos_lojas_dict):
             # Opcional: Desenhar rota do candidato para a loja mais próxima (pode ser lento se muitos candidatos)
             if loja_mais_proxima in lojas_coordenadas_cache:
                 coords_loja_selecionada = lojas_coordenadas_cache[loja_mais_proxima]
-                # A função obter_distancia_osrm precisa de otimização para não recarregar toda vez
-                # e também cuidado com o limite de requests para muitos pontos.
-                # Para este mapa, vamos tentar buscar a rota, mas esteja ciente das limitações
+                # Re-chama obter_distancia_osrm para pegar a geometria para a rota
+                # Idealmente, você armazenaria a geometria da rota mais curta no Sheets também para evitar re-cálculo
                 dist_km, tempo_seg, geometry = obter_distancia_osrm(
                     coords_candidato, coords_loja_selecionada
                 )
@@ -268,18 +318,13 @@ def gerar_mapa_historico(df_historico, enderecos_lojas_dict):
 
     # Ajusta o mapa para mostrar todos os pontos adicionados
     if all_coords_on_map:
-        m.fit_bounds(
-            [
-                [
-                    min(p[0] for p in all_coords_on_map),
-                    min(p[1] for p in all_coords_on_map),
-                ],
-                [
-                    max(p[0] for p in all_coords_on_map),
-                    max(p[1] for p in all_coords_on_map),
-                ],
-            ]
-        )
+        # Garante que min/max são calculados apenas se houver coordenadas
+        min_lat = min(p[0] for p in all_coords_on_map)
+        max_lat = max(p[0] for p in all_coords_on_map)
+        min_lon = min(p[1] for p in all_coords_on_map)
+        max_lon = max(p[1] for p in all_coords_on_map)
+
+        m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
 
     st_folium(m, width=700, height=500)
 
@@ -407,12 +452,17 @@ st.markdown("---")
 st.header("📊 Histórico de Candidatos")
 
 # Botões de controle para o histórico e mapa
-col_hist1, col_hist2, col_hist3 = st.columns([1, 1, 3])
+col_hist1, col_hist2, col_hist3 = st.columns(
+    [1, 1.2, 1]
+)  # Ajustado o tamanho das colunas
 with col_hist1:
     if st.button("Atualizar Histórico"):
         st.cache_data.clear()
         st.session_state["data_updated"] = True
-with col_hist2:
+with col_hist2:  # Este é agora o segundo botão
+    if st.button("Gerar Mapa Histórico"):
+        st.session_state["show_map"] = True  # Define uma flag para exibir o mapa
+with col_hist3:  # Este é agora o terceiro botão
     if st.button(
         "Limpar Histórico de Candidatos",
         help="Isso apagará TODOS os dados no Google Sheets para esta aplicação.",
@@ -420,9 +470,6 @@ with col_hist2:
         if limpar_dados_candidatos():
             st.session_state["data_updated"] = True
             st.session_state["show_map"] = False  # Esconde o mapa após limpar
-with col_hist3:
-    if st.button("Gerar Mapa Histórico"):
-        st.session_state["show_map"] = True  # Define uma flag para exibir o mapa
 
 dados_historico = carregar_dados_candidatos()
 
