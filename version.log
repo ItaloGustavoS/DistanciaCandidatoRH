@@ -9,3 +9,9 @@ Version
 1.2.0 - 21/07/2025
 - Enhanced user interface for better usability.
 - Added unit tests for core functionalities.
+
+1.3.0 - 21/07/2025
+- Integrated Google Sheets for data input.
+- Added historical map generation feature.
+- Improved error handling for map generation failures
+- Updated dependencies to latest versions.
