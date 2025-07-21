@@ -1,6 +1,7 @@
 import datetime
 import os
 import time
+import json
 import streamlit as st
 import requests
 from geopy.geocoders import Nominatim
@@ -9,7 +10,6 @@ import gspread
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-
 
 # --- Configurações ---
 # API pública do OSRM (lembre-se dos limites de uso!)
