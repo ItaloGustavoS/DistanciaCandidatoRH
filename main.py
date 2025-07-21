@@ -35,7 +35,7 @@ enderecos_lojas = {
     "Loja Savassi": "Rua Lavras, 96, Savassi, Belo Horizonte, MG, Brasil",
     "Loja Vila da Serra - Oscar Niemeyer": "Alameda Oscar Niemeyer, 1033, Vila da Serra, Nova Lima, MG, Brasil",
     "Loja Santo Agostinho": "Avenida Olegário Maciel, 1600, Santo Agostinho, Belo Horizonte, MG, Brasil",
-    "Loja Vila da Serra - Dicíola": "R. Dicíola Horta, 77, Vila da Serra, Nova Lima, MG, Brasil",
+    "Loja Vila da Serra - Dicíola": "R. Dicíola Horta, 77 - Vila da Serra, Belo Horizonte - MG, 30320-600, Brasil",
     "Loja Belvedere": "BR 356, 3049, Belvedere, Belo Horizonte, MG, Brasil",
 }
 
