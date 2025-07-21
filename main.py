@@ -12,17 +12,16 @@ import folium
 from streamlit_folium import st_folium
 
 # --- Configurações ---
-# API pública do OSRM (lembre-se dos limites de uso!)
+# API pública do OSRM
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1/driving/"
 # User-Agent para o Nominatim
-NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v2"  # Altere para um nome único
+NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v2"
 
 # Nome do arquivo JSON com as credenciais do Google Sheets
 GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 # Nome da sua planilha do Google Sheets
-GOOGLE_SHEET_NAME = "Dados Candidatos Lojas"  # Mude para o nome da sua planilha
+GOOGLE_SHEET_NAME = "Dados Candidatos Lojas"
 
-# --- Seus 7 endereços de lojas ---
 enderecos_lojas = {
     "Loja Centro": "Rua dos Tamoios, 300, Centro, Belo Horizonte, MG, Brasil",
     "Loja Savassi": "Rua Pernambuco, 1000, Savassi, Belo Horizonte, MG, Brasil",
@@ -152,7 +151,7 @@ def adicionar_candidato(nome, endereco, loja_mais_proxima, distancia, tempo):
             data_hora,
         ]
         worksheet.append_row(nova_linha)
-        st.cache_data.clear()  # Limpa o cache para recarregar os dados
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"Erro ao adicionar candidato no Google Sheets: {e}")
@@ -203,8 +202,8 @@ with st.container():
         )
     with col2:
         endereco_candidato_input = st.text_input(
-            "Endereço do Candidato (Ex: Rua da Paz, 20, Belo Horizonte, MG, Brasil)",
-            placeholder="Digite o endereço completo aqui...",
+            "Endereço do Candidato (Ex: Rua dos Tamoios, 300, Centro, Belo Horizonte, MG, Brasil)",
+            placeholder="Digite o endereço completo como o do exemplo aqui...",
         )
 
     if st.button("Encontrar Loja e Registrar"):
