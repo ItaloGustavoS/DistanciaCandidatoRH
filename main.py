@@ -225,7 +225,7 @@ with st.container():
                         coords = geocodificar_endereco(endereco_completo)
                         if coords:
                             coords_lojas[nome_loja] = coords
-                        time.sleep(0.1)  # Pequena pausa para Nominatim
+                        time.sleep(0.5)  # Pequena pausa para Nominatim
 
                     if not coords_lojas:
                         st.error(
@@ -253,7 +253,7 @@ with st.container():
                                     geometria_rota_mais_curta = (
                                         geometry  # Salva a geometria da rota mais curta
                                     )
-                            time.sleep(0.1)  # Pequena pausa para OSRM
+                            time.sleep(0.5)  # Pequena pausa para OSRM
                             progress_bar.progress((i + 1) / len(coords_lojas))
 
                         if loja_mais_proxima:
