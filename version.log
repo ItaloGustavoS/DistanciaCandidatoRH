@@ -57,3 +57,7 @@ Version
 - Improved error handling for Google Sheets data loading.
 - Added log to error status in Google Sheets.
 - Reworked the aplication for a diferent logic
+
+1.9.0 - 21/07/2025
+- Updated Nominatim user agent to v11.
+- Improved session state handling for search results.
