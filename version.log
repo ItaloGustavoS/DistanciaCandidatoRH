@@ -20,3 +20,10 @@ Version
 - Added timezone handling for Brasília.
 - Updated Nominatim user agent to v6.
 - Enhanced Google Sheets data loading with flexible column mapping and new fields for candidate data.
+
+1.5.0 - 21/07/2025
+- Updated Nominatim user agent to v7.
+- Improved Google Sheets data handling with standardized column names.
+- Enhanced data processing for candidate records.
+- Added timezone handling for candidate data processing.
+- Updated requirements.txt to include new dependencies.
