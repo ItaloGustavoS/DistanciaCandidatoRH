@@ -68,3 +68,7 @@ Version
 - Updated all dependencies to their latest versions.
 - Improved user interface for better user experience.
 - Added comprehensive documentation for all functions and modules.
+- Added unit tests for critical functionalities.
+- Improved session state management for address input and results display.
+- Enhanced address normalization and error handling in geocoding functions.
+- Updated store addresses for consistency and improved logging for better debugging.
