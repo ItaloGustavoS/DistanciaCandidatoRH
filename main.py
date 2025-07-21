@@ -582,7 +582,6 @@ if st.session_state["results_displayed"] and st.session_state["loja_mais_proxima
         data["geometry_rota_selecionada"],
     )
 
-st.markdown("---")  # Adicionado de volta para uma linha separadora antes dos créditos
 st.markdown(
     "Desenvolvido com ❤️ e Streamlit por [Ítalo Gustavo](https://www.linkedin.com/in/italogustavoggsenna/)"
 )
