@@ -6,36 +6,34 @@ import streamlit as st
 import requests
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
-import pandas as pd
 import folium
 from streamlit_folium import st_folium
 import pytz
-import gspread  # Reativar gspread
+import gspread
 
 # --- Configurações ---
 # API pública do OSRM
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1/driving/"
 # User-Agent para o Nominatim
-NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v9"  # Alterado para v9
+NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v9"
 
 # Nome do arquivo JSON com as credenciais do Google Sheets
 GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 # Nome da sua planilha do Google Sheets para o LOG (pode ser a mesma ou uma nova)
-# Sugiro uma nova para separar o log dos dados de candidatos anteriores, se ainda os tiver.
-GOOGLE_LOG_SHEET_NAME = "Log Pesquisas Lojas"  # <<<< VERIFIQUE E AJUSTE ESTE NOME
+GOOGLE_LOG_SHEET_NAME = "Log Pesquisas Lojas"
 
 # Fuso horário de Brasília
 BRAZIL_TIMEZONE = pytz.timezone("America/Sao_Paulo")
 
 # --- Seus 7 endereços de lojas ---
 enderecos_lojas = {
-    "Loja Centro": "Rua dos Tamoios, 300, Centro, Belo Horizonte, MG, Brasil",
-    "Loja Savassi": "Rua Pernambuco, 1000, Savassi, Belo Horizonte, MG, Brasil",
-    "Loja Pampulha": "Avenida Otacílio Negrão de Lima, 6000, Pampulha, Belo Horizonte, MG, Brasil",
-    "Loja Contagem": "Avenida João César de Oliveira, 200, Eldorado, Contagem, MG, Brasil",
-    "Loja Betim": "Rua do Rosário, 150, Centro, Betim, MG, Brasil",
-    "Loja Vespasiano": "Avenida Thales Chagas, 50, Centro, Vespasiano, MG, Brasil",
-    "Loja Nova Lima": "Alameda Oscar Niemeyer, 500, Vale do Sereno, Nova Lima, MG, Brasil",
+    "Loja Lourdes": "Rua Marília de Dirceu, 161, Lourdes, Belo Horizonte, MG, Brasil",
+    "Loja Anchieta": "Avenida dos Bandeirantes, 1733, Anchieta, Belo Horizonte, MG, Brasil",
+    "Loja Savassi": "Rua Lavras, 96, Savassi, Belo Horizonte, MG, Brasil",
+    "Loja Vila da Serra - Oscar Niemeyer": "Alameda Oscar Niemeyer, 1033, Vila da Serra, Nova Lima, MG, Brasil",
+    "Loja Santo Agostinho": "Avenida Olegário Maciel, 1600, Santo Agostinho, Belo Horizonte, MG, Brasil",
+    "Loja Vila da Serra - Dicíola": "Rua Dicíola Horta, 77, Vila da Serra, Belo Horizonte, MG, Brasil",
+    "Loja Belvedere": "BR 356, 3049, Belvedere, Belo Horizonte, MG, Brasil",
 }
 
 # --- Funções de Geocodificação e OSRM (com cache) ---
