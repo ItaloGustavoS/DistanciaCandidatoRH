@@ -61,7 +61,7 @@ def obter_distancia_osrm(coord_origem, coord_destino):
 
     url = f"{OSRM_BASE_URL}{coord_origem[1]},{coord_origem[0]};{coord_destino[1]},{coord_destino[0]}?overview=false&steps=true&geometries=geojson"
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
 
