@@ -72,7 +72,7 @@ def obter_distancia_osrm(coord_origem, coord_destino):
             return distance_meters / 1000, duration_seconds, geometry
         else:
             st.warning(
-                f"AVISO OSRM: Nenhuma rota encontrada entre os pontos. Verifique as coordenadas."
+                "AVISO OSRM: Nenhuma rota encontrada entre os pontos. Verifique as coordenadas."
             )
             return None, None, None
     except requests.exceptions.RequestException as e:
@@ -103,9 +103,19 @@ def get_google_sheet_client():
             )
             return None
         return gc
+    except gspread.exceptions.APIError as e:
+        st.error(
+            f"Erro de API ao autenticar no Google Sheets: {e}. Verifique suas credenciais."
+        )
+        return None
+    except gspread.exceptions.SpreadsheetNotFound as e:
+        st.error(
+            f"Planilha não encontrada ao autenticar no Google Sheets: {e}. Verifique o nome da planilha."
+        )
+        return None
     except Exception as e:
         st.error(
-            f"Erro ao autenticar no Google Sheets: {e}. Verifique suas credenciais."
+            f"Erro inesperado ao autenticar no Google Sheets: {e}. Verifique suas credenciais."
         )
         return None
 
