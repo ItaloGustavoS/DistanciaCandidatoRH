@@ -202,7 +202,7 @@ with st.container():
         )
     with col2:
         endereco_candidato_input = st.text_input(
-            "Endereço do Candidato (Ex: Rua dos Tamoios, 300, Centro, Belo Horizonte, MG, Brasil)",
+            "Endereço do Candidato (Ex: Avenida Afonso Pena, 1000, Centro, Belo Horizonte, MG, Brasil)",
             placeholder="Digite o endereço completo como o do exemplo aqui...",
         )
 
