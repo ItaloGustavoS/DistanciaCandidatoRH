@@ -61,3 +61,10 @@ Version
 1.9.0 - 21/07/2025
 - Updated Nominatim user agent to v11.
 - Improved session state handling for search results.
+
+2.0.0 (Final) - 21/07/2025
+- Refactored codebase for improved readability and maintainability.
+- Enhanced error handling and logging.
+- Updated all dependencies to their latest versions.
+- Improved user interface for better user experience.
+- Added comprehensive documentation for all functions and modules.
