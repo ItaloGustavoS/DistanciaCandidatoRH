@@ -47,3 +47,13 @@ Version
 - Updated requirements.txt to include pytz for timezone handling.
 - Added timezone handling for candidate data processing.
 - Improved error handling for Google Sheets data loading.
+
+1.8.0 - 21/07/2025
+- Updated Nominatim user agent to v10.
+- Refactored Google Sheets integration and improved error handling.
+- Added streamlit-folium for enhanced map visualization.
+- Updated requirements.txt to include pytz for timezone handling.
+- Added timezone handling for candidate data processing.
+- Improved error handling for Google Sheets data loading.
+- Added log to error status in Google Sheets.
+- Reworked the aplication for a diferent logic
