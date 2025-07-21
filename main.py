@@ -16,7 +16,7 @@ import pytz
 # API pública do OSRM
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1/driving/"
 # User-Agent para o Nominatim
-NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v6"  # Alterado para v6
+NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-v7"  # Alterado para v7
 
 # Nome do arquivo JSON com as credenciais do Google Sheets
 GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
@@ -46,9 +46,7 @@ def geocodificar_endereco(endereco):
     try:
         location = geolocator.geocode(endereco, timeout=10)
         if location:
-            st.info(
-                f"Endereço '{endereco}' geocodificado para: ({location.latitude:.4f}, {location.longitude:.4f})"
-            )
+            # st.info(f"Endereço '{endereco}' geocodificado para: ({location.latitude:.4f}, {location.longitude:.4f})") # Removido para menos poluição visual
             return location.latitude, location.longitude
         st.warning(
             f"Não foi possível geocodificar: '{endereco}'. Verifique a digitação ou tente um endereço mais completo (com cidade, estado e país)."
@@ -149,55 +147,57 @@ def carregar_dados_candidatos():
         if not all_values:
             return pd.DataFrame()
 
-        headers = [h.strip() for h in all_values[0]]  # Remove espaços em branco
+        # Remove espaços em branco dos cabeçalhos do Sheet
+        headers_from_sheet = [h.strip() for h in all_values[0]]
         data_rows = all_values[1:]
 
-        df = pd.DataFrame(data_rows, columns=headers)
+        df = pd.DataFrame(data_rows, columns=headers_from_sheet)
 
-        # Padroniza os nomes das colunas esperadas para evitar KeyError
-        # Mapeamento de possíveis nomes de coluna para nomes padronizados no DataFrame
-        # e também para os nomes de exibição no Streamlit
-        expected_columns_map = {
-            "nome": "Nome",
-            "endereço": "Endereço",
-            "loja_mais_proxima": "Loja Mais Próxima",
-            "endereço_loja_mais_proxima": "Endereço Loja Mais Próxima",  # Nova coluna esperada
-            "distancia_(km)": "Distância (km)",
-            "tempo_(min)": "Tempo (min)",
-            "data/hora_registro": "Data/Hora da Pesquisa",  # Novo nome de coluna
+        # Mapeamento dos cabeçalhos do Google Sheets para os nomes padronizados no DataFrame
+        # e também para os nomes de exibição no Streamlit (nomes finais)
+        # As chaves são os nomes exatos que vêm do Google Sheet
+        # Os valores são os nomes que queremos usar no DataFrame e exibir no Streamlit
+        sheet_to_display_name_map = {
+            "Nome Candidato": "Nome",
+            "Endereço Candidato": "Endereço",
+            "Loja Mais Próxima": "Loja Mais Próxima",
+            "Endereço Loja Mais Próxima": "Endereço Loja Mais Próxima",
+            "Distância (km)": "Distância (km)",
+            "Tempo (min)": "Tempo (min)",
+            "Data/Hora": "Data/Hora da Pesquisa",  # Mudei para "Data/Hora" que é o que está na sua planilha
         }
 
-        # Converte os cabeçalhos do DF para um formato mais fácil de comparar (minúsculas, sem espaços)
-        df.columns = [
-            col.strip().lower().replace(" ", "_").replace("/", "_")
-            for col in df.columns
-        ]
-
-        # Renomeia as colunas para os nomes padronizados esperados, se existirem
+        # Cria um dicionário para renomear apenas as colunas que existem no DataFrame
+        # e que estão no nosso mapeamento
         cols_to_rename = {
-            k: v for k, v in expected_columns_map.items() if k in df.columns
+            sheet_col: display_name
+            for sheet_col, display_name in sheet_to_display_name_map.items()
+            if sheet_col in df.columns
         }
         df.rename(columns=cols_to_rename, inplace=True)
 
-        # Garante que todas as colunas necessárias para o DF final existam, mesmo que vazias
-        final_df_columns = list(expected_columns_map.values())
-        for col in final_df_columns:
+        # Garante que todas as colunas desejadas para exibição existam no DF final
+        # e define a ordem de exibição
+        final_display_columns = list(sheet_to_display_name_map.values())
+        for col in final_display_columns:
             if col not in df.columns:
                 df[col] = pd.NA  # Adiciona a coluna com valores ausentes
 
         # Reordena as colunas para a exibição no Streamlit
-        df = df[final_df_columns]
+        df = df[final_display_columns]
 
         # Formata a coluna "Data/Hora da Pesquisa"
         if "Data/Hora da Pesquisa" in df.columns:
             # Converte para datetime e aplica o fuso horário
-            # Tentativa de parsear no formato '%Y-%m-%d %H:%M:%S'
+            # A linha de teste da imagem tem o formato YYYY-MM-DD HH:MM:SS
             df["Data/Hora da Pesquisa"] = pd.to_datetime(
                 df["Data/Hora da Pesquisa"], errors="coerce"
             )
 
             # Converte para o fuso horário de Brasília e formata
             # A função apply pode ser lenta para DFs muito grandes, mas é mais robusta para valores mistos
+            # Certifica-se de que o fuso horário original (UTC, se vier do servidor) é tratado
+            # antes de converter para o fuso horário de Brasília.
             df["Data/Hora da Pesquisa"] = df["Data/Hora da Pesquisa"].apply(
                 lambda x: x.tz_localize(pytz.utc)
                 .tz_convert(BRAZIL_TIMEZONE)
@@ -243,6 +243,8 @@ def adicionar_candidato(
             f"{tempo:.1f}",
             data_hora_br,
         ]
+        # Adiciona a nova linha. É crucial que a ordem aqui corresponda à ordem das COLUNAS
+        # que você TEM no seu Google Sheet.
         worksheet.append_row(nova_linha)
         st.cache_data.clear()
         return True
@@ -296,6 +298,7 @@ def gerar_mapa_historico(df_historico, enderecos_lojas_dict):
             all_coords_on_map.append(coords_loja)
 
     for index, row in df_historico.iterrows():
+        # Acessa as colunas usando os nomes já padronizados do DataFrame
         nome = row.get("Nome", "Nome Desconhecido")
         endereco = row.get("Endereço", "Endereço Desconhecido")
         loja_mais_proxima = row.get("Loja Mais Próxima", "Loja Desconhecida")
@@ -386,7 +389,7 @@ with st.container():
                         coords = geocodificar_endereco(endereco_completo)
                         if coords:
                             coords_lojas[nome_loja] = coords
-                        time.sleep(0.5)  # Pausa para Nominatim
+                        time.sleep(0.5)
 
                     if not coords_lojas:
                         st.error(
@@ -404,9 +407,7 @@ with st.container():
                         melhor_distancia_km = float("inf")
                         melhor_tempo_seg = float("inf")
                         loja_mais_proxima = None
-                        endereco_loja_selecionada = (
-                            None  # Para armazenar o endereço da loja mais próxima
-                        )
+                        endereco_loja_selecionada = None
 
                         progress_bar = st.progress(0)
 
@@ -424,7 +425,7 @@ with st.container():
                                     loja_mais_proxima = nome_loja
                                     endereco_loja_selecionada = enderecos_lojas[
                                         nome_loja
-                                    ]  # Pega o endereço original
+                                    ]
                             time.sleep(0.5)
                             progress_bar.progress((i + 1) / len(coords_lojas))
 
@@ -445,12 +446,11 @@ with st.container():
                                 f"Tempo de viagem estimado: **{melhor_tempo_seg / 60:.1f} minutos**."
                             )
 
-                            # Adicionar ao Google Sheets, incluindo o endereço da loja mais próxima
                             if adicionar_candidato(
                                 nome_candidato_input,
                                 endereco_candidato_input,
                                 loja_mais_proxima,
-                                endereco_loja_selecionada,  # Passando o novo campo
+                                endereco_loja_selecionada,
                                 melhor_distancia_km,
                                 melhor_tempo_seg / 60,
                             ):
