@@ -4,6 +4,7 @@ import time
 import json
 import traceback
 import unicodedata
+import re
 import streamlit as st
 import requests
 from geopy.geocoders import Nominatim
@@ -14,25 +15,13 @@ import pytz
 import gspread
 
 # --- Configurações ---
-# API pública do OSRM
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1/driving/"
-# User-Agent para o Nominatim
-NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-vFinal"  # Versão final
-
-# Nome do arquivo JSON com as credenciais do Google Sheets
+NOMINATIM_USER_AGENT = "minha-aplicacao-lojas-streamlit-vFinal"
 GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
-# Nome da sua planilha do Google Sheets para o LOG
-GOOGLE_LOG_SHEET_NAME = (
-    "Log Pesquisas Lojas"  # Mantenha este nome consistente com sua planilha
-)
-
-# Fuso horário de Brasília
+GOOGLE_LOG_SHEET_NAME = "Log Pesquisas Lojas"
 BRAZIL_TIMEZONE = pytz.timezone("America/Sao_Paulo")
+BRASILAPI_CEP_URL = "https://brasilapi.com.br/api/cep/v1/"
 
-# --- Seus 7 endereços de lojas ---
-# Mantenha os endereços o mais completos possível.
-# Acentuação será removida automaticamente pela função de normalização.
-# Se um endereço ainda falhar na geocodificação, verifique-o em um mapa online.
 enderecos_lojas = {
     "Loja Lourdes": "Rua Marilia de Dirceu, 161, Lourdes, Belo Horizonte, MG, Brasil",
     "Loja Anchieta": "Avenida dos Bandeirantes, 1733, Anchieta, Belo Horizonte, MG, Brasil",
@@ -47,20 +36,32 @@ enderecos_lojas = {
 
 
 def normalize_address(address):
-    """
-    Remove acentos, converte para minúsculas e remove espaços extras.
-    Ajuda o Nominatim a interpretar melhor.
-    """
     if not isinstance(address, str):
         return address
     address = (
         unicodedata.normalize("NFKD", address).encode("ascii", "ignore").decode("utf-8")
     )
-    address = (
-        address.replace(".", "").replace(",", "").strip()
-    )  # Remove pontuação comum
-    address = " ".join(address.split())  # Remove múltiplos espaços
+    address = address.replace(".", "").replace(",", "").strip()
+    address = " ".join(address.split())
     return address
+
+
+def is_cep_format(input_string):
+    digits_only = re.sub(r"\D", "", input_string)
+    return len(digits_only) == 8
+
+
+def format_address_from_cep_data(cep_data):
+    if not cep_data:
+        return None
+    rua = cep_data.get("street", "")
+    bairro = cep_data.get("neighborhood", "")
+    cidade = cep_data.get("city", "")
+    estado_uf = cep_data.get("state", "")
+    pais = "Brasil"
+    partes = [rua, bairro, cidade, estado_uf, pais]
+    endereco_completo = ", ".join(filter(None, partes))
+    return endereco_completo
 
 
 # --- Funções de Geocodificação e OSRM (com cache) ---
@@ -74,7 +75,6 @@ def geocodificar_endereco(endereco_original):
         location = geolocator.geocode(endereco_normalizado, timeout=10)
         if location:
             return location.latitude, location.longitude
-
         msg = (
             f"❌ Falha na geocodificação de '{endereco_original}'. "
             f"Tentado como '{endereco_normalizado}'. "
@@ -115,19 +115,16 @@ def geocodificar_endereco(endereco_original):
 def obter_distancia_osrm(coord_origem, coord_destino):
     if not coord_origem or not coord_destino:
         return None, None, None
-
     url = f"{OSRM_BASE_URL}{coord_origem[1]},{coord_origem[0]};{coord_destino[1]},{coord_destino[0]}?overview=full&steps=true&geometries=geojson"
     try:
         response = requests.get(url, timeout=10)
-        response.raise_for_status()  # Lança HTTPError para status de erro (4xx ou 5xx)
+        response.raise_for_status()
         data = response.json()
-
         if data and "routes" in data and len(data["routes"]) > 0:
             route_info = data["routes"][0]
             distance_meters = route_info.get("distance")
             duration_seconds = route_info.get("duration")
             geometry = route_info.get("geometry")
-
             if (
                 distance_meters is not None
                 and duration_seconds is not None
@@ -213,6 +210,72 @@ def obter_distancia_osrm(coord_origem, coord_destino):
         return None, None, None
 
 
+# --- Nova Função com Cache para BrasilAPI ---
+@st.cache_data(ttl=3600)  # Cache para resultados da BrasilAPI por 1 hora
+def fetch_address_from_brasilapi(cep):
+    cep_limpo = re.sub(r"\D", "", cep)
+    url = f"{BRASILAPI_CEP_URL}{cep_limpo}"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()  # Levanta um erro para status 4xx/5xx
+        cep_data = response.json()
+
+        # BrasilAPI retorna erro 404 para CEP não encontrado, que é capturado por raise_for_status()
+        # Se chegou até aqui, é porque a requisição foi 2xx ou os dados indicam um problema
+        if cep_data and "cep" in cep_data:
+            return cep_data
+        else:
+            # Caso a API retorne 200, mas com dados vazios ou que não contêm "cep"
+            adicionar_log(
+                cep,
+                "BRASILAPI_CEP_VAZIO",
+                f"BrasilAPI retornou dados, mas sem 'cep' para {cep_limpo}. Dados: {cep_data}",
+            )
+            return None
+    except requests.exceptions.HTTPError as e:
+        status_code = e.response.status_code
+        if status_code == 404:
+            msg = f"❌ CEP {cep_limpo} não encontrado pela BrasilAPI."
+            st.warning(msg)
+            adicionar_log(cep_limpo, "ERRO_BRASILAPI_404", msg)
+        else:
+            msg = f"🚨 Erro HTTP ({status_code}) ao consultar BrasilAPI para o CEP {cep_limpo}: {e.response.text}."
+            st.error(msg)
+            adicionar_log(
+                cep_limpo,
+                "ERRO_BRASILAPI_HTTP",
+                msg + f" Traceback: {traceback.format_exc()}",
+            )
+        return None
+    except requests.exceptions.ConnectionError as e:
+        msg = f"🚨 Erro de conexão ao consultar BrasilAPI para o CEP {cep_limpo}: {e}. Verifique sua conexão."
+        st.error(msg)
+        adicionar_log(
+            cep_limpo,
+            "ERRO_BRASILAPI_CONEXAO",
+            msg + f" Traceback: {traceback.format_exc()}",
+        )
+        return None
+    except requests.exceptions.Timeout as e:
+        msg = f"⏰ Tempo limite excedido ao consultar BrasilAPI para o CEP {cep_limpo}: {e}. Tente novamente mais tarde."
+        st.error(msg)
+        adicionar_log(
+            cep_limpo,
+            "ERRO_BRASILAPI_TIMEOUT",
+            msg + f" Traceback: {traceback.format_exc()}",
+        )
+        return None
+    except Exception as e:
+        msg = f"⛔ Erro inesperado ao consultar BrasilAPI para o CEP {cep_limpo}: {e}. Contate o suporte."
+        st.error(msg)
+        adicionar_log(
+            cep_limpo,
+            "ERRO_BRASILAPI_INESPERADO",
+            msg + f" Traceback: {traceback.format_exc()}",
+        )
+        return None
+
+
 # --- Funções para Interagir com Google Sheets (para Log) ---
 
 
@@ -280,20 +343,13 @@ def get_google_sheet_client():
 def adicionar_log(endereco_pesquisado, status, mensagem_log=""):
     gc = get_google_sheet_client()
     if gc is None:
-        # A mensagem já foi exibida por get_google_sheet_client()
-        # st.warning("Não foi possível adicionar o log: Cliente do Google Sheets não disponível.")
         return False
     try:
         sh = gc.open(GOOGLE_LOG_SHEET_NAME)
-        worksheet = sh.sheet1  # Assume que o log vai para a primeira aba
-
-        # Obtém a hora atual no fuso horário de Brasília
+        worksheet = sh.sheet1
         now_utc = datetime.datetime.now(pytz.utc)
         now_br = now_utc.astimezone(BRAZIL_TIMEZONE)
-        data_hora_br = now_br.strftime(
-            "%d/%m/%Y %H:%M:%S"
-        )  # Adicionado segundos para mais granularidade no log
-
+        data_hora_br = now_br.strftime("%d/%m/%Y %H:%M:%S")
         nova_linha = [data_hora_br, endereco_pesquisado, status, mensagem_log]
         worksheet.append_row(nova_linha)
         return True
@@ -312,7 +368,7 @@ def adicionar_log(endereco_pesquisado, status, mensagem_log=""):
         print(f"ERRO DE LOG WORKSHEET NOT FOUND: {traceback.format_exc()}")
         return False
     except Exception as e:
-        full_traceback = traceback.format_exc()  # Captura o traceback completo
+        full_traceback = traceback.format_exc()
         st.error(
             f"⛔ Erro inesperado ao adicionar log no Google Sheets: {e}. Detalhes no console."
         )
@@ -329,9 +385,7 @@ def gerar_mapa_pesquisa(
     endereco_loja_mais_proxima,
     geometry_route,
 ):
-    map_center = (
-        coords_candidato if coords_candidato else [-19.919, -43.938]
-    )  # Centro BH
+    map_center = coords_candidato if coords_candidato else [-19.919, -43.938]
     m = folium.Map(location=map_center, zoom_start=12)
 
     if coords_candidato:
@@ -349,7 +403,6 @@ def gerar_mapa_pesquisa(
         ).add_to(m)
 
     if geometry_route:
-        # A API OSRM retorna GeoJSON com [longitude, latitude], folium espera [latitude, longitude]
         inverted_coordinates = [
             [coord[1], coord[0]] for coord in geometry_route["coordinates"]
         ]
@@ -367,7 +420,6 @@ def gerar_mapa_pesquisa(
     if coords_loja_mais_proxima:
         all_coords_on_map.append(coords_loja_mais_proxima)
 
-    # Ajusta o zoom do mapa para incluir ambos os pontos, se existirem
     if len(all_coords_on_map) == 2:
         min_lat = min(p[0] for p in all_coords_on_map)
         max_lat = max(p[0] for p in all_coords_on_map)
@@ -376,7 +428,7 @@ def gerar_mapa_pesquisa(
         m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
     elif len(all_coords_on_map) == 1:
         m.location = all_coords_on_map[0]
-        m.zoom_start = 14  # Zoom um pouco mais próximo para um único ponto
+        m.zoom_start = 14
 
     st_folium(m, width=700, height=500)
 
@@ -387,79 +439,121 @@ st.set_page_config(
 )
 
 st.title("📍 Localizador de Loja Mais Próxima")
-st.write("Insira o endereço para encontrar a loja mais próxima do Candidato.")
+st.write("Insira o endereço ou CEP para encontrar a loja mais próxima do Candidato.")
 
-# Inicialização do session_state (se ainda não existirem)
-# Este bloco garante que os valores padrão são definidos apenas uma vez
+# Inicialização do session_state
 if "results_displayed" not in st.session_state:
     st.session_state["results_displayed"] = False
 if "loja_mais_proxima_data" not in st.session_state:
     st.session_state["loja_mais_proxima_data"] = None
 if "current_address_input" not in st.session_state:
-    st.session_state["current_address_input"] = (
-        ""  # Para controlar o input programaticamente
-    )
+    st.session_state["current_address_input"] = ""
+
 
 # --- Entrada de Dados ---
 with st.container():
     st.header("Endereço para Pesquisa")
-    endereco_candidato_input = st.text_input(
-        "Endereço (Ex: Avenida Afonso Pena, 1000, Centro, Belo Horizonte, MG, Brasil)",
-        placeholder="Digite o endereço completo (rua, número, bairro, cidade, estado, país).",
-        help="Removeremos acentos e abreviações para melhor detecção. Ex: 'Rua' ao invés de 'R.'.",
-        key="address_input",  # Mantém a chave para Streamlit
-        value=st.session_state["current_address_input"],  # Conecta com o session_state
+
+    endereco_ou_cep_input = st.text_input(
+        "Endereço Completo ou CEP (Ex: Avenida Afonso Pena, 1000, Centro, Belo Horizonte, MG, Brasil ou 30130001)",
+        placeholder="Digite o endereço completo ou apenas o CEP aqui...",
+        help="Se for um CEP, o endereço será preenchido automaticamente ao clicar em 'Buscar Endereço por CEP'.",
+        key="main_address_input",
+        value=st.session_state["current_address_input"],
     )
 
-    if st.button("Encontrar Loja"):
-        # Limpa resultados anteriores ao iniciar uma nova busca
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        find_store_button = st.button("Encontrar Loja")
+    with col2:
+        fetch_address_by_cep_button = st.button("Buscar Endereço por CEP")
+
+    if fetch_address_by_cep_button:  # Botão Buscar Endereço por CEP foi clicado
+        if is_cep_format(endereco_ou_cep_input):
+            cep_limpo = re.sub(r"\D", "", endereco_ou_cep_input)
+            st.info(f"Buscando endereço para o CEP: {cep_limpo}...")
+            adicionar_log(
+                cep_limpo,
+                "BUSCA_CEP_INICIADA",
+                "Usuário clicou para buscar endereço por CEP.",
+            )
+
+            cep_data = fetch_address_from_brasilapi(
+                cep_limpo
+            )  # Chama a nova função com cache
+
+            if cep_data:
+                full_address = format_address_from_cep_data(cep_data)
+                if full_address:
+                    st.session_state["current_address_input"] = full_address
+                    st.success(f"Endereço encontrado para o CEP {cep_limpo}:")
+                    st.markdown(f"**{full_address}**")
+                    adicionar_log(
+                        cep_limpo,
+                        "CEP_ENCONTRADO",
+                        f"Endereço encontrado: {full_address}",
+                    )
+                    st.rerun()  # Força o Streamlit a re-renderizar para atualizar o text_input
+                else:
+                    msg = f"❌ CEP {cep_limpo} encontrado, mas dados insuficientes para montar o endereço completo."
+                    st.warning(msg)
+                    adicionar_log(
+                        cep_limpo, "CEP_INSUFICIENTE", msg + f" Dados: {cep_data}"
+                    )
+            # Se cep_data for None, a função fetch_address_from_brasilapi já tratou e logou o erro/aviso
+
+        else:
+            st.warning(
+                "Por favor, digite um CEP válido (8 dígitos numéricos) para usar a busca por CEP."
+            )
+            adicionar_log(
+                endereco_ou_cep_input,
+                "ERRO_VALIDACAO_CEP",
+                "Input não é um CEP válido.",
+            )
+
+    if find_store_button:  # Botão Encontrar Loja foi clicado
         st.session_state["results_displayed"] = False
         st.session_state["loja_mais_proxima_data"] = None
 
+        endereco_final_para_pesquisa = endereco_ou_cep_input
+
         if (
-            not endereco_candidato_input or len(endereco_candidato_input.strip()) < 10
-        ):  # Aumentei o mínimo para 10
+            not endereco_final_para_pesquisa
+            or len(endereco_final_para_pesquisa.strip()) < 10
+        ):
             st.warning(
                 "Por favor, preencha um endereço válido e mais completo (mínimo 10 caracteres)."
             )
             adicionar_log(
-                endereco_candidato_input,
+                endereco_final_para_pesquisa,
                 "ERRO_VALIDACAO",
                 "Endereço inválido/muito curto.",
             )
         else:
-            # Normaliza o endereço do candidato ANTES de tentar geocodificar
-            endereco_candidato_normalizado = normalize_address(endereco_candidato_input)
-            st.info(
-                f"Tentando geocodificar o endereço: '{endereco_candidato_normalizado}'"
+            endereco_candidato_normalizado = normalize_address(
+                endereco_final_para_pesquisa
             )
+            st.info(f"Iniciando cálculo para: '{endereco_candidato_normalizado}'")
 
             with st.spinner(
                 "Geocodificando seu endereço e das lojas. Isso pode levar alguns segundos..."
             ):
-                coords_candidato = geocodificar_endereco(
-                    endereco_candidato_input
-                )  # Passa o original para log e msg de erro
+                coords_candidato = geocodificar_endereco(endereco_final_para_pesquisa)
 
                 if not coords_candidato:
-                    # Mensagem de erro já tratada dentro de geocodificar_endereco
-                    pass  # Não faz nada aqui, pois a função já exibiu o erro e logou
+                    pass
                 else:
                     coords_lojas = {}
                     lojas_nao_geocodificadas = []
 
-                    # Geocodificação das lojas
                     for nome_loja, endereco_completo_loja in enderecos_lojas.items():
-                        coords = geocodificar_endereco(
-                            endereco_completo_loja
-                        )  # Passa o original da loja
+                        coords = geocodificar_endereco(endereco_completo_loja)
                         if coords:
                             coords_lojas[nome_loja] = coords
                         else:
                             lojas_nao_geocodificadas.append(nome_loja)
-                        time.sleep(
-                            1
-                        )  # Atraso para respeitar a política de uso da API do Nominatim
+                        time.sleep(1)  # Atraso para Nominatim
 
                     if lojas_nao_geocodificadas:
                         msg_lojas = (
@@ -469,7 +563,7 @@ with st.container():
                         )
                         st.warning(msg_lojas)
                         adicionar_log(
-                            endereco_candidato_input,
+                            endereco_final_para_pesquisa,
                             "AVISO_LOJAS_NAO_GEOCODIFICADAS",
                             msg_lojas,
                         )
@@ -477,7 +571,7 @@ with st.container():
                     if not coords_lojas:
                         error_msg = "❌ Nenhuma das lojas pôde ser geocodificada. Não é possível calcular rotas. Verifique os endereços das lojas."
                         st.error(error_msg)
-                        adicionar_log(endereco_candidato_input, "ERRO", error_msg)
+                        adicionar_log(endereco_final_para_pesquisa, "ERRO", error_msg)
                     else:
                         melhor_distancia_km = float("inf")
                         melhor_tempo_seg = float("inf")
@@ -488,7 +582,6 @@ with st.container():
 
                         rotas_com_problema = []
 
-                        # Cálculo das rotas para encontrar a mais próxima
                         for nome_loja, coords_loja in coords_lojas.items():
                             dist_km, tempo_seg, geometry = obter_distancia_osrm(
                                 coords_candidato, coords_loja
@@ -506,9 +599,7 @@ with st.container():
                                     geometry_rota_selecionada = geometry
                             else:
                                 rotas_com_problema.append(nome_loja)
-                            time.sleep(
-                                1
-                            )  # Atraso para respeitar a política de uso da API do OSRM
+                            time.sleep(1)  # Atraso para OSRM
 
                         if rotas_com_problema:
                             msg_rotas = (
@@ -518,13 +609,14 @@ with st.container():
                             )
                             st.warning(msg_rotas)
                             adicionar_log(
-                                endereco_candidato_input, "AVISO_ROTAS_FALHA", msg_rotas
+                                endereco_final_para_pesquisa,
+                                "AVISO_ROTAS_FALHA",
+                                msg_rotas,
                             )
 
                         if loja_mais_proxima_nome:
-                            # Armazenar os dados na session_state
                             st.session_state["loja_mais_proxima_data"] = {
-                                "endereco_pesquisado": endereco_candidato_input,
+                                "endereco_pesquisado": endereco_final_para_pesquisa,
                                 "coords_candidato": coords_candidato,
                                 "loja_mais_proxima_nome": loja_mais_proxima_nome,
                                 "endereco_loja_selecionada": endereco_loja_selecionada,
@@ -535,26 +627,23 @@ with st.container():
                             }
                             st.session_state["results_displayed"] = True
                             adicionar_log(
-                                endereco_candidato_input,
+                                endereco_final_para_pesquisa,
                                 "OK",
                                 f"Sucesso: Loja encontrada: {loja_mais_proxima_nome}. Dist: {melhor_distancia_km:.2f} km.",
                             )
-                            st.session_state["current_address_input"] = (
-                                ""  # Limpa o campo após sucesso
-                            )
+                            st.session_state["current_address_input"] = ""
 
                         else:
                             error_msg = "❌ Não foi possível determinar a loja mais próxima. Todos os cálculos de rota falharam ou nenhuma loja pôde ser geocodificada. Por favor, revise o endereço pesquisado e os endereços das lojas."
                             st.error(error_msg)
                             adicionar_log(
-                                endereco_candidato_input,
+                                endereco_final_para_pesquisa,
                                 "ERRO_NAO_ENCONTRADO",
                                 error_msg,
                             )
                             st.session_state["results_displayed"] = False
 
 # Exibir os resultados e o mapa se houver dados na session_state
-# Esta parte do código será executada sempre que a página for recarregada ou um botão for clicado
 if st.session_state["results_displayed"] and st.session_state["loja_mais_proxima_data"]:
     data = st.session_state["loja_mais_proxima_data"]
     st.success("--- Resultado da Pesquisa ---")
