@@ -72,3 +72,8 @@ Version
 - Improved session state management for address input and results display.
 - Enhanced address normalization and error handling in geocoding functions.
 - Updated store addresses for consistency and improved logging for better debugging.
+
+2.1.0 - 23/07/2025
+- Added CEP search functionality to the store locator.
+- Improved address handling in the store locator.
+- Enhanced error handling for address normalization and geocoding.
