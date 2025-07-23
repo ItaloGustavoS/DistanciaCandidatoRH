@@ -670,7 +670,7 @@ if st.session_state["results_displayed"] and st.session_state["loja_mais_proxima
         data["endereco_loja_selecionada"],
         data["geometry_rota_selecionada"],
     )
-
+st.markdown("---")
 st.markdown(
     "Desenvolvido com ❤️ e Streamlit por [Ítalo Gustavo](https://www.linkedin.com/in/italogustavoggsenna/)"
 )
